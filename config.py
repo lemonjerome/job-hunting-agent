@@ -39,7 +39,7 @@ SHEET_EMAILS: str = "Emails Seen"
 SHEET_RESUME: str = "Resume Versions"
 
 # --- Resume ---
-RESUME_FILENAME: str = "RAMOS_Gabriel_C_Resume.pdf"
+RESUME_FILENAME: str = os.environ["RESUME_FILENAME"]
 
 # --- Email senders to monitor ---
 EMAIL_SENDERS: dict[str, str] = {

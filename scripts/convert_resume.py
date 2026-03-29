@@ -1,7 +1,7 @@
 """
 Phase 1 — Resume conversion + version tracking script.
 
-Finds RAMOS_Gabriel_C_Resume.pdf in GDrive "Job Application" folder,
+Finds the resume PDF (set via RESUME_FILENAME env var) in GDrive "Job Application" folder,
 converts it to text (for LLM use at runtime — never committed to repo),
 and logs file metadata + a short LLM summary to the "Resume Versions" GSheet tab.
 

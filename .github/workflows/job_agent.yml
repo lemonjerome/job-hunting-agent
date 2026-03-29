@@ -47,6 +47,7 @@ jobs:
           GMAIL_CREDENTIALS:  credentials.json
           GDRIVE_CREDENTIALS: credentials.json
           SELF_EMAIL:         ${{ secrets.SELF_EMAIL }}
+          RESUME_FILENAME:    ${{ secrets.RESUME_FILENAME }}
 
       - name: Clean up credential files
         if: always()

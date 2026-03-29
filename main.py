@@ -44,6 +44,76 @@ async def smoke_test_llm() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Resume version check (runs before the graph on every invocation)
+# ---------------------------------------------------------------------------
+
+async def _check_resume_version() -> None:
+    """
+    Check if the resume PDF in GDrive has been updated since the last logged
+    version. If so, download it, generate an LLM summary, and append a new row
+    to the Resume Versions sheet tab.
+
+    This replaces the need to manually run scripts/convert_resume.py.
+    """
+    import io
+
+    try:
+        import pypdf
+    except ImportError:
+        import PyPDF2 as pypdf  # type: ignore[no-redef]
+
+    from langchain_core.messages import HumanMessage
+
+    from config import get_llm
+    from tools.sheets_tools import (
+        append_resume_version,
+        download_resume_pdf,
+        find_resume_in_gdrive,
+        get_last_resume_version,
+        get_or_create_sheet,
+    )
+
+    print("[resume_check] Checking resume version...")
+    spreadsheet_id = get_or_create_sheet()
+
+    meta = find_resume_in_gdrive()
+    if not meta:
+        print("[resume_check] Resume PDF not found in GDrive — skipping.")
+        return
+
+    last = get_last_resume_version(spreadsheet_id)
+    if last and last.get("Modified At") == meta["modifiedTime"]:
+        print(f"[resume_check] Resume unchanged (v{last['Version']}) — skipping.")
+        return
+
+    print("[resume_check] New or updated resume detected — logging version...")
+    pdf_bytes = download_resume_pdf()
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    resume_text = "\n".join(
+        (page.extract_text() or "").strip() for page in reader.pages
+    )
+
+    llm = get_llm(temperature=0.0)
+    summary_resp = await llm.ainvoke([HumanMessage(content=(
+        "In exactly 3 bullet points (use • as bullet), summarise this resume. "
+        "Focus on: (1) years of experience and level, "
+        "(2) top technical skills, (3) most recent role.\n\n"
+        + resume_text[:3000]
+    ))])
+
+    append_resume_version(spreadsheet_id, {
+        "filename":      meta["name"],
+        "file_id":       meta["id"],
+        "file_size":     meta.get("size", ""),
+        "created_at":    meta.get("createdTime", ""),
+        "modified_at":   meta["modifiedTime"],
+        "short_summary": summary_resp.content.strip(),
+    })
+    print("[resume_check] Resume version logged.")
+
+
+# ---------------------------------------------------------------------------
 # Full graph run
 # ---------------------------------------------------------------------------
 
@@ -53,6 +123,8 @@ async def run_graph() -> None:
     print("=" * 60)
     print("Job Hunting Agent — Starting")
     print("=" * 60)
+
+    await _check_resume_version()
 
     # Initial state — all fields have sensible defaults
     initial_state = {

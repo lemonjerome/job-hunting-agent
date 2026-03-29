@@ -169,21 +169,15 @@ After running both, you'll have `.gmail_token.json` and `.gdrive_token.json` in 
 
 ### Step 5 — Upload your resume
 
-Upload your resume PDF to Google Drive in a folder called **`Job Application`**. The file must be named:
+Upload your resume PDF to Google Drive in a folder called **`Job Application`**. The filename can be anything — you'll set it as an env var.
 
-```
-RAMOS_Gabriel_C_Resume.pdf
-```
+Set `RESUME_FILENAME` in your `.env` to match the exact filename (case-sensitive):
 
-> If you're adapting this for yourself, update `RESUME_FILENAME` in `config.py` to match your filename.
-
-Then run the resume conversion script to log it to the tracking sheet:
-
-```bash
-python scripts/convert_resume.py
+```env
+RESUME_FILENAME=Your_Name_Resume.pdf
 ```
 
-This creates a `Job Applications` Google Sheet with three tabs (Jobs, Emails Seen, Resume Versions) and logs the first resume version.
+Version tracking is automatic — every time the agent runs, it checks whether the GDrive PDF has been modified since the last logged version and logs a new entry if so. No manual script needed.
 
 ---
 
@@ -231,6 +225,7 @@ Before pushing, add these 6 secrets to your GitHub repo under **Settings → Sec
 | `OLLAMA_BASE_URL` | `https://ollama.com` |
 | `OLLAMA_API_KEY` | your Ollama Cloud API key |
 | `SELF_EMAIL` | your Gmail address |
+| `RESUME_FILENAME` | exact PDF filename in your Drive (e.g. `John_Doe_Resume.pdf`) |
 
 The first three commands run in your terminal from the project root. Copy the full output (including any trailing `=`) into the secret value field.
 
@@ -287,14 +282,9 @@ In GitHub Actions, credentials are written from base64-encoded secrets at runtim
 
 To use this for your own job search:
 
-1. Update `RESUME_FILENAME` in `config.py` to your PDF filename
+1. Set `RESUME_FILENAME` in `.env` (and as a GitHub Secret) to your PDF filename
 2. Optionally update `EMAIL_SENDERS` in `config.py` if you use different job alert senders
 3. Optionally adjust `EMAIL_LOOKBACK_HOURS` (default: 8h, matches the 3×/day schedule)
 4. Upload your resume PDF to Google Drive in a `Job Application` folder
 5. Follow the setup guide above
 
----
-
-## License
-
-MIT
