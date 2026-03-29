@@ -18,6 +18,9 @@ state.json
 # Resume — kept in GDrive, never committed (public repo)
 resume.md
 
+# Virtual environment
+.venv/
+
 # Python
 __pycache__/
 *.pyc
