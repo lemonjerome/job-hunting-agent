@@ -1,0 +1,24 @@
+# LangGraph + LangChain
+langgraph>=0.2
+langchain-core>=0.3
+langchain-ollama>=0.2
+
+# Browser automation
+playwright>=1.44
+playwright-stealth>=1.0
+
+# MCP (Model Context Protocol)
+mcp>=1.0
+
+# Google APIs (fallback if MCP tooling needs direct access)
+google-auth>=2.29
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.127
+
+# PDF to Markdown (resume conversion)
+pypdf2>=3.0
+markdownify>=0.13
+
+# Utilities
+python-dotenv>=1.0
+aiohttp>=3.9
