@@ -40,7 +40,7 @@ JOB_URL_PATTERNS: dict[str, re.Pattern] = {
         r"https?://(www\.)?linkedin\.com/(comm/)?jobs/view/\d+"
     ),
     "jobstreet": re.compile(
-        r"https?://(www\.)?jobstreet\.com\.ph/job/\d+"
+        r"https?://((www\.|ph\.)?jobstreet\.com(\.ph)?)/job/\d+"
     ),
     "glassdoor": re.compile(
         r"https?://(www\.)?glassdoor\.(com|sg|co\.uk)/job-listing/.*?jobListingId=\d+"
@@ -48,6 +48,14 @@ JOB_URL_PATTERNS: dict[str, re.Pattern] = {
     "indeed": re.compile(
         r"https?://(click\.indeed\.com|www\.indeed\.com/viewjob|ph\.indeed\.com/viewjob)"
     ),
+}
+
+# Tracking/redirect link patterns used by email platforms for each site.
+# When a direct URL match fails, we look for these in the href and decode the
+# embedded target URL from common query-param names.
+_TRACKING_DOMAINS: dict[str, re.Pattern] = {
+    "jobstreet": re.compile(r"https?://[^/]*e\.jobstreet\.com/"),
+    "indeed":    re.compile(r"https?://click\.indeed\.com/"),
 }
 
 
@@ -138,6 +146,10 @@ def extract_job_urls(email: dict) -> list[str]:
     Parse the email HTML body and return all URLs that look like
     direct job detail pages for the email's site.
     Filters out 'see all jobs', 'view more', unsubscribe links, etc.
+
+    For sites that use click-tracking redirects (e.g. e.jobstreet.com),
+    the embedded target URL is decoded from common query-param names
+    (url, u, target, redirect) and checked against the site pattern.
     """
     html = email.get("html_body", "")
     site = email.get("site", "")
@@ -146,16 +158,49 @@ def extract_job_urls(email: dict) -> list[str]:
 
     soup = BeautifulSoup(html, "html.parser")
     pattern = JOB_URL_PATTERNS[site]
+    tracking = _TRACKING_DOMAINS.get(site)
     seen: set[str] = set()
     urls: list[str] = []
 
     for tag in soup.find_all("a", href=True):
         href: str = tag["href"]
-        if pattern.search(href) and href not in seen:
-            seen.add(href)
-            urls.append(href)
+
+        # Direct match
+        if pattern.search(href):
+            if href not in seen:
+                seen.add(href)
+                urls.append(href)
+            continue
+
+        # Tracking/redirect URL — try to extract the embedded target
+        if tracking and tracking.search(href):
+            decoded = _decode_tracking_url(href, pattern)
+            if decoded and decoded not in seen:
+                seen.add(decoded)
+                urls.append(decoded)
 
     return urls
+
+
+def _decode_tracking_url(href: str, pattern: re.Pattern) -> str | None:
+    """
+    Given a tracking/redirect URL, attempt to extract the final destination
+    URL from common query-parameter names and check it against pattern.
+    Returns the decoded URL if it matches, else None.
+    """
+    from urllib.parse import urlparse, parse_qs, unquote
+
+    try:
+        parsed = urlparse(href)
+        params = parse_qs(parsed.query)
+        for key in ("url", "u", "target", "redirect", "dest", "link"):
+            if key in params:
+                candidate = unquote(params[key][0])
+                if pattern.search(candidate):
+                    return candidate
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------

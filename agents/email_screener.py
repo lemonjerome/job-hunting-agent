@@ -54,8 +54,25 @@ Answer NO if:
 
 Email subject: {subject}
 
-Email body excerpt (first 1500 chars):
+Email body excerpt (first 8000 chars):
 {body_excerpt}
+
+Reply with exactly one word: YES or NO"""
+
+_GLASSDOOR_AI_ML_PROMPT = """\
+You are reviewing a Glassdoor job alert email. Determine if ANY of the listed
+jobs are related to AI or Machine Learning.
+
+Answer YES if at least one job title involves: AI, ML, Machine Learning,
+Data Science, NLP, Computer Vision, LLM, Deep Learning, AI Trainer,
+or similar AI/ML fields.
+
+Answer NO only if ALL jobs are clearly unrelated to AI/ML.
+
+Email subject: {subject}
+
+Job titles found in this email:
+{titles}
 
 Reply with exactly one word: YES or NO"""
 
@@ -108,12 +125,29 @@ async def email_screener_node(state: dict) -> dict:
     for email in emails:
         site = email["site"]
         subject = email["subject"]
-        body_excerpt = email["html_body"][:1500]
+        body_excerpt = email["html_body"][:8000]
+
+        # --- Glassdoor: pre-parse cards before LLM verdict ---
+        # Cards give us job titles (for a reliable YES/NO) + fallback data for
+        # the scraper. Always do this regardless of verdict outcome.
+        card_contexts: dict[str, dict] = {}
+        if site == "glassdoor":
+            card_contexts = parse_glassdoor_email_cards(email["html_body"])
+            glassdoor_contexts.update(card_contexts)
 
         # --- AI/ML verdict ---
-        verdict_resp = await llm.ainvoke([HumanMessage(content=_IS_AI_ML_PROMPT.format(
-            subject=subject, body_excerpt=body_excerpt,
-        ))])
+        if site == "glassdoor" and card_contexts:
+            # Use extracted job titles — more reliable than truncated HTML
+            titles = "\n".join(
+                f"- {ctx['title']}" for ctx in card_contexts.values() if ctx.get("title")
+            )
+            verdict_resp = await llm.ainvoke([HumanMessage(content=_GLASSDOOR_AI_ML_PROMPT.format(
+                subject=subject, titles=titles,
+            ))])
+        else:
+            verdict_resp = await llm.ainvoke([HumanMessage(content=_IS_AI_ML_PROMPT.format(
+                subject=subject, body_excerpt=body_excerpt,
+            ))])
         is_ai_ml = verdict_resp.content.strip().upper().startswith("YES")
 
         # --- Summary (always, for logging) ---
@@ -125,12 +159,11 @@ async def email_screener_node(state: dict) -> dict:
         extracted_urls: list[str] = []
 
         if is_ai_ml:
-            urls = extract_job_urls(email)
-
-            # Glassdoor: also parse email card context for scraper fallback
-            if site == "glassdoor" and urls:
-                card_contexts = parse_glassdoor_email_cards(email["html_body"])
-                glassdoor_contexts.update(card_contexts)
+            if site == "glassdoor":
+                # Use card URLs directly — cards already parsed above with same regex
+                urls = list(card_contexts.keys())
+            else:
+                urls = extract_job_urls(email)
 
             # Deduplicate across emails from the same site
             existing = job_urls_by_site.setdefault(site, [])
