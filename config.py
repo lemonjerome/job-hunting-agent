@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from langchain_ollama import ChatOllama
 
 load_dotenv()
 
@@ -7,6 +8,16 @@ load_dotenv()
 OLLAMA_BASE_URL: str = os.environ["OLLAMA_BASE_URL"]
 OLLAMA_API_KEY: str = os.environ["OLLAMA_API_KEY"]
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "minimax-m2.7")
+
+
+def get_llm(temperature: float = 0.0) -> ChatOllama:
+    """Return a configured ChatOllama instance pointing at the Ollama Cloud API."""
+    return ChatOllama(
+        base_url=OLLAMA_BASE_URL,
+        model=OLLAMA_MODEL,
+        api_key=OLLAMA_API_KEY,
+        temperature=temperature,
+    )
 
 # --- Gmail MCP ---
 GMAIL_CREDENTIALS: str = os.environ["GMAIL_CREDENTIALS"]
