@@ -1,141 +1,123 @@
 """
-Phase 1 — One-time resume conversion script.
+Phase 1 — Resume conversion + version tracking script.
 
-Finds the resume PDF in GDrive "Job Application" folder via the GDrive MCP,
-downloads it, converts to Markdown, and writes resume.md to the project root.
+Finds RAMOS_Gabriel_C_Resume.pdf in GDrive "Job Application" folder,
+converts it to text (for LLM use at runtime — never committed to repo),
+and logs file metadata + a short LLM summary to the "Resume Versions" GSheet tab.
 
-Usage:
+Run this whenever you update your resume:
     python scripts/convert_resume.py
 
-Requirements:
-    - GDRIVE_CREDENTIALS must be set in .env
-    - The resume PDF must exist in Google Drive under "Job Application/"
+Version tracking logic:
+  - Compares the GDrive file's modifiedTime against the last logged version.
+  - Only adds a new row if the file has been modified since the last check.
+  - Uses auto-incrementing version numbers.
+
+Note: resume.md is gitignored. The agent reads the resume from GDrive at runtime.
 """
 
 import asyncio
 import io
-import os
-import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from config import GDRIVE_CREDENTIALS, GDRIVE_FOLDER
+from config import RESUME_FILENAME, get_llm
+from tools.sheets_tools import (
+    append_resume_version,
+    download_resume_pdf,
+    find_resume_in_gdrive,
+    get_last_resume_version,
+    get_or_create_sheet,
+)
+from langchain_core.messages import HumanMessage
 
 try:
     import pypdf
 except ImportError:
-    import PyPDF2 as pypdf  # fallback alias
-
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-OUTPUT_PATH = ROOT / "resume.md"
+    try:
+        import PyPDF2 as pypdf
+    except ImportError:
+        pypdf = None
 
 
-def _get_gdrive_service():
-    """Authenticate and return a Google Drive API service object."""
-    creds = None
-    token_path = ROOT / ".gdrive_token.json"
+def _pdf_to_text(pdf_bytes: bytes) -> str:
+    """Extract plain text from PDF bytes."""
+    if pypdf is None:
+        raise ImportError("Install pypdf: pip install pypdf2")
 
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(GDRIVE_CREDENTIALS, SCOPES)
-            creds = flow.run_local_server(port=0)
-        token_path.write_text(creds.to_json())
-
-    return build("drive", "v3", credentials=creds)
-
-
-def _find_resume_pdf(service) -> tuple[str, str]:
-    """Search for a PDF file inside the 'Job Application' GDrive folder."""
-    # Find the folder first
-    folder_result = service.files().list(
-        q=f"name='{GDRIVE_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        fields="files(id, name)",
-    ).execute()
-    folders = folder_result.get("files", [])
-    if not folders:
-        raise FileNotFoundError(f"GDrive folder '{GDRIVE_FOLDER}' not found.")
-    folder_id = folders[0]["id"]
-
-    # Find the specific resume PDF by name
-    pdf_result = service.files().list(
-        q=(
-            f"'{folder_id}' in parents "
-            f"and name='RAMOS_Gabriel_C_Resume.pdf' "
-            f"and mimeType='application/pdf' "
-            f"and trashed=false"
-        ),
-        fields="files(id, name)",
-        orderBy="modifiedTime desc",
-    ).execute()
-    pdfs = pdf_result.get("files", [])
-    if not pdfs:
-        raise FileNotFoundError(f"No PDF found in GDrive folder '{GDRIVE_FOLDER}'.")
-
-    # Use the most recently modified PDF
-    resume_file = pdfs[0]
-    print(f"Found resume: {resume_file['name']} (id: {resume_file['id']})")
-    return resume_file["id"], resume_file["name"]
-
-
-def _download_pdf(service, file_id: str) -> bytes:
-    """Download a file from GDrive by ID and return its bytes."""
-    request = service.files().get_media(fileId=file_id)
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return buf.getvalue()
-
-
-def _pdf_bytes_to_markdown(pdf_bytes: bytes) -> str:
-    """Extract text from PDF bytes and format as Markdown."""
     reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-    pages_text = []
+    pages = []
     for page in reader.pages:
         text = page.extract_text() or ""
-        pages_text.append(text.strip())
-
-    raw = "\n\n".join(pages_text)
-
-    # Normalise whitespace
-    lines = [line.rstrip() for line in raw.splitlines()]
-    # Collapse 3+ blank lines into 2
-    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
-    return cleaned.strip()
+        pages.append(text.strip())
+    return "\n\n".join(pages)
 
 
-def main() -> None:
-    print("Authenticating with Google Drive...")
-    service = _get_gdrive_service()
+async def _llm_summarise(text: str) -> str:
+    """Ask the LLM for a 3-bullet summary of the resume."""
+    llm = get_llm(temperature=0.0)
+    prompt = (
+        "In exactly 3 bullet points (use • as bullet), summarise this resume. "
+        "Focus on: (1) years of experience and level, "
+        "(2) top technical skills, (3) most recent role.\n\n"
+        + text[:3000]
+    )
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    return response.content.strip()
 
-    print(f"Searching for resume PDF in '{GDRIVE_FOLDER}'...")
-    file_id, file_name = _find_resume_pdf(service)
 
+async def main() -> None:
+    print("Connecting to Google services...")
+    spreadsheet_id = get_or_create_sheet()
+
+    print(f"Searching for '{RESUME_FILENAME}' in GDrive...")
+    meta = find_resume_in_gdrive()
+    if not meta:
+        print(f"ERROR: '{RESUME_FILENAME}' not found in GDrive 'Job Application' folder.")
+        sys.exit(1)
+
+    print(f"Found: {meta['name']}  (modified: {meta['modifiedTime']})")
+
+    # -- Check if this version is already logged --
+    last = get_last_resume_version(spreadsheet_id)
+    if last and last.get("Modified At") == meta["modifiedTime"]:
+        print("Resume has not changed since last logged version. Nothing to do.")
+        print(f"Last version: v{last['Version']} logged at {last['Detected At']}")
+        return
+
+    # -- Download and convert --
     print("Downloading PDF...")
-    pdf_bytes = _download_pdf(service, file_id)
+    pdf_bytes = download_resume_pdf()
 
-    print("Converting PDF to Markdown...")
-    markdown = _pdf_bytes_to_markdown(pdf_bytes)
+    print("Extracting text from PDF...")
+    resume_text = _pdf_to_text(pdf_bytes)
 
-    OUTPUT_PATH.write_text(markdown, encoding="utf-8")
-    print(f"resume.md written to {OUTPUT_PATH} ({len(markdown)} chars)")
-    print("\nDone! Review resume.md and commit it before proceeding to Phase 2.")
+    # -- Write resume.md locally (gitignored) for local dev convenience --
+    resume_md_path = ROOT / "resume.md"
+    resume_md_path.write_text(resume_text, encoding="utf-8")
+    print(f"resume.md written locally ({len(resume_text)} chars) — gitignored, not committed.")
+
+    # -- LLM summary --
+    print("Generating resume summary via LLM...")
+    summary = await _llm_summarise(resume_text)
+    print(f"\nSummary:\n{summary}\n")
+
+    # -- Log to Resume Versions sheet --
+    print("Logging to 'Resume Versions' sheet...")
+    append_resume_version(spreadsheet_id, {
+        "filename":    meta["name"],
+        "file_id":     meta["id"],
+        "file_size":   meta.get("size", ""),
+        "created_at":  meta.get("createdTime", ""),
+        "modified_at": meta["modifiedTime"],
+        "short_summary": summary,
+    })
+
+    print("Done. New resume version logged to GSheet.")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

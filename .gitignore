@@ -15,6 +15,9 @@ token.json
 # Runtime state (stored in GDrive)
 state.json
 
+# Resume — kept in GDrive, never committed (public repo)
+resume.md
+
 # Python
 __pycache__/
 *.pyc

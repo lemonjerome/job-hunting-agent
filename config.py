@@ -19,6 +19,7 @@ def get_llm(temperature: float = 0.0) -> ChatOllama:
         temperature=temperature,
     )
 
+
 # --- Gmail MCP ---
 GMAIL_CREDENTIALS: str = os.environ["GMAIL_CREDENTIALS"]
 
@@ -30,18 +31,29 @@ SELF_EMAIL: str = os.environ["SELF_EMAIL"]
 
 # --- GDrive targets ---
 GDRIVE_FOLDER: str = "Job Application"
-SHEET_NAME: str = "Job Applications"
+GSHEET_FILE_NAME: str = "Job Applications"
 
-# --- Search configs: (keyword, location) ---
-SEARCH_CONFIGS: list[tuple[str, str]] = [
-    ("AI", "Philippines"),
-    ("ML", "Philippines"),
-    ("Artificial Intelligence", "Philippines"),
-    ("Machine Learning", "Philippines"),
-]
+# --- GSheet tab names ---
+SHEET_JOBS: str = "Jobs"
+SHEET_EMAILS: str = "Emails Seen"
+SHEET_RESUME: str = "Resume Versions"
+
+# --- Resume ---
+RESUME_FILENAME: str = "RAMOS_Gabriel_C_Resume.pdf"
+
+# --- Email senders to monitor ---
+EMAIL_SENDERS: dict[str, str] = {
+    "linkedin":   "jobalerts-noreply@linkedin.com",
+    "jobstreet":  "noreply@e.jobstreet.com",
+    "glassdoor":  "noreply@glassdoor.com",
+    "indeed":     "donotreply@match.indeed.com",
+}
+
+# --- Email screening window (hours) ---
+# Runs at 6am / 2pm / 10pm — look back 8h to avoid gaps
+EMAIL_LOOKBACK_HOURS: int = 8
 
 # --- Scraping ---
-JOBS_PER_CONFIG: int = 10
 STEALTH_USER_AGENT: str = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "

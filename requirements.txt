@@ -19,6 +19,9 @@ google-api-python-client>=2.127
 pypdf2>=3.0
 markdownify>=0.13
 
+# HTML parsing (email body extraction)
+beautifulsoup4>=4.12
+
 # Utilities
 python-dotenv>=1.0
 aiohttp>=3.9
