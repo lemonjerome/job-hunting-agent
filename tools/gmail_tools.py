@@ -102,7 +102,7 @@ def search_job_alert_emails(seen_ids: set[str]) -> list[dict]:
             continue
 
         full = service.users().messages().get(
-            userId="me", messageId=msg_id, format="full",
+            userId="me", id=msg_id, format="full",
         ).execute()
 
         headers = {h["name"]: h["value"] for h in full["payload"]["headers"]}

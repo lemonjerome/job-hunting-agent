@@ -10,6 +10,7 @@ brainstorming/
 credentials.json
 client_secret_*.json
 .gdrive_token.json
+.gmail_token.json
 token.json
 
 # Runtime state (stored in GDrive)
