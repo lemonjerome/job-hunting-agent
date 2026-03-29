@@ -2,7 +2,9 @@ name: Job Hunting Agent
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # every 6 hours
+    - cron: '0 22 * * *'   # 6am PHT  (UTC+8)
+    - cron: '0 6 * * *'    # 2pm PHT
+    - cron: '0 14 * * *'   # 10pm PHT
   workflow_dispatch:          # manual trigger from GitHub Actions UI
 
 jobs:
@@ -26,12 +28,26 @@ jobs:
       - name: Install Playwright Chromium
         run: playwright install chromium --with-deps
 
+      - name: Write credential files from secrets
+        run: |
+          echo "$GMAIL_CREDENTIALS_JSON" | base64 -d > credentials.json
+          echo "$GDRIVE_TOKEN_JSON"      | base64 -d > .gdrive_token.json
+          echo "$GMAIL_TOKEN_JSON"       | base64 -d > .gmail_token.json
+        env:
+          GMAIL_CREDENTIALS_JSON: ${{ secrets.GMAIL_CREDENTIALS_JSON }}
+          GDRIVE_TOKEN_JSON:      ${{ secrets.GDRIVE_TOKEN_JSON }}
+          GMAIL_TOKEN_JSON:       ${{ secrets.GMAIL_TOKEN_JSON }}
+
       - name: Run Job Hunting Agent
         run: python main.py
         env:
           OLLAMA_BASE_URL:    ${{ secrets.OLLAMA_BASE_URL }}
           OLLAMA_API_KEY:     ${{ secrets.OLLAMA_API_KEY }}
-          OLLAMA_MODEL:       ${{ secrets.OLLAMA_MODEL }}
-          GMAIL_CREDENTIALS:  ${{ secrets.GMAIL_CREDENTIALS }}
-          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          OLLAMA_MODEL:       minimax-m2.7
+          GMAIL_CREDENTIALS:  credentials.json
+          GDRIVE_CREDENTIALS: credentials.json
           SELF_EMAIL:         ${{ secrets.SELF_EMAIL }}
+
+      - name: Clean up credential files
+        if: always()
+        run: rm -f credentials.json .gdrive_token.json .gmail_token.json
