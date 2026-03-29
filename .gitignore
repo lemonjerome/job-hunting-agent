@@ -6,6 +6,12 @@ brainstorming/
 # Environment
 .env
 
+# Google OAuth credentials and tokens (never commit these)
+credentials.json
+client_secret_*.json
+.gdrive_token.json
+token.json
+
 # Runtime state (stored in GDrive)
 state.json
 

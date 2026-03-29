@@ -70,9 +70,14 @@ def _find_resume_pdf(service) -> tuple[str, str]:
         raise FileNotFoundError(f"GDrive folder '{GDRIVE_FOLDER}' not found.")
     folder_id = folders[0]["id"]
 
-    # Find a PDF inside that folder
+    # Find the specific resume PDF by name
     pdf_result = service.files().list(
-        q=f"'{folder_id}' in parents and mimeType='application/pdf' and trashed=false",
+        q=(
+            f"'{folder_id}' in parents "
+            f"and name='RAMOS_Gabriel_C_Resume.pdf' "
+            f"and mimeType='application/pdf' "
+            f"and trashed=false"
+        ),
         fields="files(id, name)",
         orderBy="modifiedTime desc",
     ).execute()
