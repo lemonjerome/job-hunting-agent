@@ -66,10 +66,10 @@ def _route_after_email_screener(state: AgentState):
     # LangGraph Send: each Send() creates a separate node invocation
     return [
         Send("scrape_site", {
-            "site":               site,
-            "urls":               urls,
-            "spreadsheet_id":     state["spreadsheet_id"],
-            "glassdoor_contexts": state.get("glassdoor_contexts", {}),
+            "site":            site,
+            "urls":            urls,
+            "spreadsheet_id":  state["spreadsheet_id"],
+            "email_contexts":  state.get("email_contexts", {}),
         })
         for site, urls in active_sites.items()
     ]

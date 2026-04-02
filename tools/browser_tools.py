@@ -419,82 +419,377 @@ def _glassdoor_from_email(url: str, ctx: dict | None) -> JobData:
 
 
 # ---------------------------------------------------------------------------
-# Glassdoor email card parser
+# Unified email job card parser (all 4 sites)
 # ---------------------------------------------------------------------------
 
-def parse_glassdoor_email_cards(html: str) -> dict[str, dict]:
-    """
-    Parse a Glassdoor job alert email HTML and return a dict mapping
-    job URL → card data {title, company, location, pay, rating}.
+# Per-site patterns that identify a job detail link in email HTML *or* plain text.
+# Includes direct job URLs AND tracking/redirect URLs used by each site's email platform.
+_EMAIL_JOB_LINK_PATTERNS: dict[str, re.Pattern] = {
+    "linkedin":  re.compile(
+        r"linkedin\.com/(comm/)?jobs/view/\d+",
+        re.I,
+    ),
+    # Direct URL OR url.jobstreet.com SendGrid tracking link
+    "jobstreet": re.compile(
+        r"(ph\.)?jobstreet\.com(\.ph)?/job/\d+|url\.jobstreet\.com",
+        re.I,
+    ),
+    "glassdoor": re.compile(
+        r"glassdoor\.com.*(job-listing|GD_JOB|JobId|jobListing)",
+        re.I,
+    ),
+    # Direct viewjob URL, pagead tracking, or cts.indeed.com single-job email links
+    "indeed": re.compile(
+        r"(click\.indeed\.com|indeed\.com/viewjob|ph\.indeed\.com/viewjob"
+        r"|ph\.indeed\.com/pagead/clk|cts\.indeed\.com/v3/)",
+        re.I,
+    ),
+}
 
-    Called in email_screener before URLs are passed to the scraper.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    cards: dict[str, dict] = {}
+# Sites whose email links are tracking redirects needing resolution to canonical URLs
+_NEEDS_REDIRECT: set[str] = {"jobstreet", "indeed"}
 
-    # Glassdoor email cards are typically table rows or div blocks
-    # Each card has a job link and surrounding company/salary text
-    for link in soup.find_all("a", href=True):
-        href: str = link["href"]
-        # Only job detail links
-        if not re.search(r"glassdoor\.com.*(job-listing|GD_JOB|JobId)", href, re.I):
-            continue
+# Pay/salary regex — matches ₱/$/£/€ + PHP amounts with optional K suffix, ranges, period
+_PAY_RE = re.compile(
+    r"(?:PHP|₱|\$|£|€)\s*[\d,]+[Kk]?(?:\s*[-–]\s*[\d,]+[Kk]?)?(?:\s*/\s*\w+)?",
+    re.I,
+)
 
-        # Walk up to find the card container (3-4 levels up usually)
-        card_el = link
-        for _ in range(5):
-            card_el = card_el.parent
-            if card_el is None:
+# Rating — "4.2" or "4.2 ★" in card text
+_RATING_RE = re.compile(r"\b([1-5]\.\d)\b")
+
+# Glassdoor link text often concatenates company + rating + title, e.g.:
+# "Acme Corp3.9 ★Senior ML Engineer"
+# Split on the rating separator to isolate the job title.
+_GLASSDOOR_RATING_SPLIT_RE = re.compile(r"[1-5]\.\d\s*★\s*")
+
+
+def _card_context_from_element(card_el, link) -> dict:
+    """Extract {title, company, location, pay, rating} from a card DOM element."""
+    card_text = card_el.get_text(" ", strip=True)
+    raw_link_text = link.get_text(strip=True)
+
+    # Glassdoor email cards concatenate company + rating + title in the link text,
+    # e.g. "Acme Corp3.9 ★Senior ML Engineer (Remote)$124K - $138K..."
+    # Split on the rating separator to isolate company (before) and title (after).
+    rating = ""
+    title = raw_link_text
+    company_from_link = ""
+    rating_match_in_link = _GLASSDOOR_RATING_SPLIT_RE.search(raw_link_text)
+    if rating_match_in_link:
+        rating_str = raw_link_text[rating_match_in_link.start():rating_match_in_link.end()]
+        rating = rating_str.strip()
+        company_from_link = raw_link_text[:rating_match_in_link.start()].strip()
+        title = raw_link_text[rating_match_in_link.end():].strip()
+        # Title may still have pay appended, strip trailing pay info
+        pay_in_title = _PAY_RE.search(title)
+        if pay_in_title:
+            title = title[:pay_in_title.start()].strip()
+
+    # Company — prefer data-test attrs, fall back to class patterns, then link-parsed value
+    company = company_from_link  # may already be set from Glassdoor link text split
+    if not company:
+        for attr_val in ("employer-short-name", "employer-name", "company-name"):
+            el = card_el.find(attrs={"data-test": attr_val})
+            if el:
+                company = el.get_text(strip=True)
                 break
-            text = card_el.get_text(" ", strip=True)
-            if len(text) > 50:
-                break
+    if not company:
+        el = card_el.find(class_=re.compile(r"employer|company|org", re.I))
+        if el:
+            company = el.get_text(strip=True)
 
-        if card_el is None:
-            continue
+    # Location
+    location = ""
+    for attr_val in ("employer-location", "location", "job-location"):
+        el = card_el.find(attrs={"data-test": attr_val})
+        if el:
+            location = el.get_text(strip=True)
+            break
+    if not location:
+        el = card_el.find(class_=re.compile(r"location|city|address", re.I))
+        if el:
+            location = el.get_text(strip=True)
 
-        card_text = card_el.get_text(" ", strip=True)
+    # Pay — regex over card text
+    pay = ""
+    pay_match = _PAY_RE.search(card_text)
+    if pay_match:
+        pay = pay_match.group(0).strip()
 
-        # Extract title from the link itself
-        title = link.get_text(strip=True)
-
-        # Try to find company name (often a sibling element)
-        company = ""
-        company_el = card_el.find(attrs={"data-test": "employer-short-name"})
-        if not company_el:
-            company_el = card_el.find(class_=re.compile(r"employer|company", re.I))
-        if company_el:
-            company = company_el.get_text(strip=True)
-
-        # Location
-        location = ""
-        loc_el = card_el.find(attrs={"data-test": "employer-location"})
-        if not loc_el:
-            loc_el = card_el.find(class_=re.compile(r"location|loc", re.I))
-        if loc_el:
-            location = loc_el.get_text(strip=True)
-
-        # Salary — look for currency patterns
-        pay = ""
-        pay_match = re.search(r"[₱$€£]\s*[\d,]+(?:\s*[-–]\s*[\d,]+)?(?:\s*/\s*\w+)?", card_text)
-        if pay_match:
-            pay = pay_match.group(0).strip()
-
-        # Rating — look for "X.X ★" patterns
-        rating = ""
-        rating_match = re.search(r"\b([1-5]\.\d)\b", card_text)
+    # Rating — already set if parsed from Glassdoor link text, else search card text
+    if not rating:
+        rating_match = _RATING_RE.search(card_text)
         if rating_match:
             rating = f"{rating_match.group(1)} ★"
 
-        cards[href] = {
-            "title": title,
-            "company": company,
-            "location": location,
-            "pay": pay,
-            "rating": rating,
-        }
+    return {"title": title, "company": company, "location": location, "pay": pay, "rating": rating}
+
+
+def _find_card_container(link, min_text_len: int = 40):
+    """Walk up the DOM from a link to find the enclosing card element."""
+    card_el = link
+    for _ in range(6):
+        parent = card_el.parent
+        if parent is None:
+            break
+        text = parent.get_text(" ", strip=True)
+        if len(text) >= min_text_len:
+            card_el = parent
+            break
+        card_el = parent
+    return card_el
+
+
+def parse_email_job_cards(html: str, site: str) -> dict[str, dict]:
+    """
+    Parse a job alert email HTML for any of the 4 supported sites and return
+    a dict mapping job URL → card data {title, company, location, pay, rating}.
+
+    Two-pass strategy:
+      1. HTML pass  — find <a href> tags, walk DOM for card context.
+      2. Plain text fallback — if email arrived as text/plain (wrapped in <pre>),
+         extract URLs via regex and parse surrounding lines for card context.
+
+    For sites in _NEEDS_REDIRECT (Jobstreet, Indeed), tracking URLs are returned
+    as-is; the caller (email_screener_node) must resolve them to canonical URLs.
+
+    Returns {} if site is unrecognised or no job links are found.
+    """
+    pattern = _EMAIL_JOB_LINK_PATTERNS.get(site)
+    if not pattern:
+        return {}
+
+    soup = BeautifulSoup(html, "html.parser")
+    cards: dict[str, dict] = {}
+
+    # --- Pass 1: HTML <a> tag parsing ---
+    for link in soup.find_all("a", href=True):
+        href: str = link["href"]
+        job_url = _resolve_job_url(href, pattern)
+        if not job_url:
+            continue
+        card_el = _find_card_container(link)
+        ctx = _card_context_from_element(card_el, link)
+        # Keep first seen, but upgrade if stored title is empty and new one has a title
+        # (LinkedIn emails have 3 anchors per job; first is often empty)
+        if job_url not in cards or (not cards[job_url].get("title") and ctx.get("title")):
+            cards[job_url] = ctx
+
+    # --- Post-pass: fix generic link texts (e.g. Indeed "View job" CTA) ---
+    # Indeed single-job emails have "View job" as the link text; the job title
+    # is in an <h1> heading with format "Title @ Company". Patch cards that
+    # have a generic placeholder title.
+    _GENERIC_TITLES = re.compile(r"^(view job|apply now|apply|see job|learn more|introduction)$", re.I)
+    if site == "indeed" and cards:
+        h1 = soup.find("h1")
+        h1_text = h1.get_text(strip=True) if h1 else ""
+        for url, ctx in cards.items():
+            if _GENERIC_TITLES.match((ctx.get("title") or "").strip()):
+                if " @ " in h1_text:
+                    parts = h1_text.split(" @ ", 1)
+                    ctx["title"] = parts[0].strip()
+                    if not ctx.get("company"):
+                        ctx["company"] = parts[1].strip()
+                elif h1_text:
+                    ctx["title"] = h1_text
+
+    if cards:
+        return cards
+
+    # --- Pass 2: Plain-text fallback ---
+    # Triggered when the email arrived as text/plain (no <a> tags found).
+    # _extract_html_body wraps plain text in <pre>...</pre>.
+    raw_text = soup.get_text(" ", strip=False)
+    plain_cards = _parse_plain_text_email(raw_text, site, pattern)
+    return plain_cards
+
+
+# ---------------------------------------------------------------------------
+# Plain-text email parser (LinkedIn, Jobstreet, Indeed often send text/plain)
+# ---------------------------------------------------------------------------
+
+_PLAIN_URL_RE = re.compile(r"https?://[^\s\[\]<>\"']+")
+
+# Lines to skip when extracting card context from plain text.
+# Matches anywhere in the line (not just full-line) to catch suffixed variants
+# like "Apply with resume & profile" or "This company is actively hiring now".
+_NOISE_LINES = re.compile(
+    r"(this company is actively hiring|actively recruiting|"
+    r"apply with resume|easily apply|quickly apply|"
+    r"recently posted|view job:|^\s*logo\s*$|"
+    r"\d+ school alumni|"
+    r"we want to help|we recommend|based on your|"
+    r"%%str_to_replace|open tracking|"
+    r"job recommendations|match\.|hi gabriel)",
+    re.I,
+)
+
+
+def _parse_plain_text_email(text: str, site: str, pattern: re.Pattern) -> dict[str, dict]:
+    """
+    Extract job URL → card context from a plain-text email body.
+    Finds all URLs matching the site pattern and looks at lines above each URL
+    to extract title, company, location, and pay.
+    """
+    lines = text.splitlines()
+    cards: dict[str, dict] = {}
+    seen: set[str] = set()
+
+    for i, line in enumerate(lines):
+        # Find all URLs on this line
+        for m in _PLAIN_URL_RE.finditer(line):
+            raw_url = m.group(0).rstrip(".,;)\"'>]")
+            if not pattern.search(raw_url):
+                continue
+            if raw_url in seen:
+                continue
+            seen.add(raw_url)
+
+            # Collect non-noise context lines above this URL (up to 8 lines back)
+            ctx_lines: list[str] = []
+            for prev_line in lines[max(0, i - 8):i]:
+                stripped = prev_line.strip()
+                if not stripped:
+                    continue
+                if _PLAIN_URL_RE.match(stripped) or stripped.startswith("[http"):
+                    continue  # skip other URLs / bracketed link lines
+                if _NOISE_LINES.search(stripped):
+                    continue
+                if len(stripped) > 100:
+                    continue  # skip long description/snippet lines
+                ctx_lines.append(stripped)
+
+            ctx = _plain_text_card_context(ctx_lines, site, text)
+            cards[raw_url] = ctx
 
     return cards
+
+
+def _plain_text_card_context(ctx_lines: list[str], site: str, full_text: str) -> dict:
+    """Parse title / company / location / pay from lines above a job URL."""
+    title = company = location = pay = ""
+
+    if site == "linkedin":
+        # Format (bottom of ctx_lines, reading upward from URL):
+        #   ...
+        #   [location]
+        #   [company]
+        #   [title]
+        #   View job: <url>      ← current line
+        # ctx_lines is in top-down order so last entries are closest to URL
+        useful = ctx_lines  # already filtered
+        if len(useful) >= 3:
+            title    = useful[-3]
+            company  = useful[-2]
+            location = useful[-1]
+        elif len(useful) == 2:
+            title   = useful[-2]
+            company = useful[-1]
+        elif len(useful) == 1:
+            title = useful[-1]
+
+    elif site == "jobstreet":
+        # Format:
+        #   [title]
+        #   [company]
+        #   [location]
+        #   Recently posted        ← filtered out as noise
+        #   [tracking URL]
+        useful = [l for l in ctx_lines if l.lower() not in ("recently posted", "logo")]
+        if len(useful) >= 3:
+            title    = useful[-3]
+            company  = useful[-2]
+            location = useful[-1]
+        elif len(useful) == 2:
+            title   = useful[-2]
+            company = useful[-1]
+        elif len(useful) == 1:
+            title = useful[-1]
+        pay_m = _PAY_RE.search(" ".join(ctx_lines))
+        if pay_m:
+            pay = pay_m.group(0).strip()
+
+    elif site == "indeed":
+        # Format:
+        #   [title]
+        #   [company] - [location]      (on one line separated by " - ")
+        #   Easily apply               ← filtered out
+        #   [short description snippet]
+        #   [tracking URL]
+        useful = ctx_lines
+        if len(useful) >= 2:
+            title = useful[-2]
+            company_loc = useful[-1]
+            if " - " in company_loc:
+                parts = company_loc.split(" - ", 1)
+                company  = parts[0].strip()
+                location = parts[1].strip()
+            else:
+                company = company_loc
+        elif len(useful) == 1:
+            title = useful[-1]
+        pay_m = _PAY_RE.search(" ".join(ctx_lines))
+        if pay_m:
+            pay = pay_m.group(0).strip()
+
+    return {"title": title, "company": company, "location": location, "pay": pay, "rating": ""}
+
+
+def _normalize_job_url(href: str) -> str:
+    """
+    Strip tracking query params from job URLs where the job ID is in the path.
+    Keeps query params for URLs where the job ID IS a query param (e.g. Glassdoor).
+    """
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(href)
+    # LinkedIn job IDs are always in the path; strip all query params
+    if "linkedin.com" in parsed.netloc and re.search(r"/jobs/view/\d+", parsed.path):
+        return urlunparse(parsed._replace(query="", fragment=""))
+    return href
+
+
+def _resolve_job_url(href: str, pattern: re.Pattern) -> str | None:
+    """
+    Return a canonical job URL from href.
+    Tries direct match first, then decodes common tracking/redirect query params.
+    """
+    from urllib.parse import urlparse, parse_qs, unquote
+
+    # Direct match
+    if pattern.search(href):
+        return _normalize_job_url(href)
+
+    # Try to decode tracking redirect — check common param names
+    try:
+        parsed = urlparse(href)
+        params = parse_qs(parsed.query)
+        param_keys = (
+            "url", "u", "target", "redirect", "dest", "link",
+            "clickUrl", "destination", "href", "URL",
+            "redirect_url", "target_url",
+        )
+        for key in param_keys:
+            if key in params:
+                candidate = unquote(params[key][0])
+                if pattern.search(candidate):
+                    return candidate
+
+        # Brute-force: try every query param value
+        for values in params.values():
+            candidate = unquote(values[0])
+            if pattern.search(candidate):
+                return candidate
+    except Exception:
+        pass
+
+    return None
+
+
+# Backward-compatible alias (used by email_screener imports)
+def parse_glassdoor_email_cards(html: str) -> dict[str, dict]:
+    """Deprecated: use parse_email_job_cards(html, 'glassdoor') instead."""
+    return parse_email_job_cards(html, "glassdoor")
 
 
 # ---------------------------------------------------------------------------
@@ -510,11 +805,31 @@ SCRAPERS = {
 async def scrape_job(site: str, url: str, email_context: dict | None = None) -> JobData:
     """
     Dispatch to the correct scraper for the given site.
-    Glassdoor always receives email_context for fallback.
+    email_context (from email card parser) is used as fallback data if scraping fails.
+    Glassdoor uses it directly; other sites fall back to it only when blocked.
     """
     if site == "glassdoor":
         return await scrape_glassdoor(url, email_context)
+
     scraper = SCRAPERS.get(site)
-    if scraper:
-        return await scraper(url)
-    return JobData(url=url, site=site, blocked=True)
+    if not scraper:
+        return JobData(url=url, site=site, blocked=True)
+
+    job = await scraper(url)
+
+    # For non-Glassdoor sites: if scraping returned blocked/empty AND we have
+    # email card context, backfill the missing fields from the email data.
+    if email_context and (job.blocked or (not job.title and not job.company)):
+        return JobData(
+            url=url,
+            site=site,
+            title=email_context.get("title", ""),
+            company=email_context.get("company", ""),
+            location=email_context.get("location", ""),
+            pay=email_context.get("pay", ""),
+            description="",
+            source="email_fallback",
+            blocked=False,
+        )
+
+    return job

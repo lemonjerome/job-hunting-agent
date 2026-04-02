@@ -54,8 +54,9 @@ JOB_URL_PATTERNS: dict[str, re.Pattern] = {
 # When a direct URL match fails, we look for these in the href and decode the
 # embedded target URL from common query-param names.
 _TRACKING_DOMAINS: dict[str, re.Pattern] = {
-    "jobstreet": re.compile(r"https?://[^/]*e\.jobstreet\.com/"),
-    "indeed":    re.compile(r"https?://click\.indeed\.com/"),
+    "linkedin":  re.compile(r"https?://[^/]*linkedin\.com/comm/careers-email-tracking", re.I),
+    "jobstreet": re.compile(r"https?://[^/]*e\.jobstreet\.com/", re.I),
+    "indeed":    re.compile(r"https?://click\.indeed\.com/", re.I),
 }
 
 
@@ -193,11 +194,22 @@ def _decode_tracking_url(href: str, pattern: re.Pattern) -> str | None:
     try:
         parsed = urlparse(href)
         params = parse_qs(parsed.query)
-        for key in ("url", "u", "target", "redirect", "dest", "link"):
+        # Extended set of common redirect/tracking param names
+        param_keys = (
+            "url", "u", "target", "redirect", "dest", "link",
+            "clickUrl", "destination", "href", "URL",
+            "redirect_url", "target_url",
+        )
+        for key in param_keys:
             if key in params:
                 candidate = unquote(params[key][0])
                 if pattern.search(candidate):
                     return candidate
+        # Brute-force: try every param value (catches unusual param names)
+        for values in params.values():
+            candidate = unquote(values[0])
+            if pattern.search(candidate):
+                return candidate
     except Exception:
         pass
     return None
@@ -251,23 +263,28 @@ def _parse_date(date_str: str) -> str:
 
 def _extract_html_body(payload: dict) -> str:
     """
-    Recursively walk the MIME payload tree and return the first text/html part.
-    Falls back to text/plain if no HTML part exists.
+    Walk the MIME payload tree and return the best body for parsing:
+    prefers text/html over text/plain (multipart/alternative emails send both).
+
+    For multipart messages, collects all text parts first and returns HTML
+    if found; otherwise returns the plain-text fallback wrapped in <pre>.
     """
-    mime_type = payload.get("mimeType", "")
-    body_data = payload.get("body", {}).get("data", "")
+    html_part: str = ""
+    plain_part: str = ""
 
-    if mime_type == "text/html" and body_data:
-        return base64.urlsafe_b64decode(body_data + "==").decode("utf-8", errors="replace")
+    def _collect(p: dict) -> None:
+        nonlocal html_part, plain_part
+        mime = p.get("mimeType", "")
+        data = p.get("body", {}).get("data", "")
 
-    if mime_type == "text/plain" and body_data:
-        # Keep as fallback
-        plain = base64.urlsafe_b64decode(body_data + "==").decode("utf-8", errors="replace")
-        return f"<pre>{plain}</pre>"
+        if mime == "text/html" and data and not html_part:
+            html_part = base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+        elif mime == "text/plain" and data and not plain_part:
+            plain = base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+            plain_part = f"<pre>{plain}</pre>"
+        else:
+            for sub in p.get("parts", []):
+                _collect(sub)
 
-    for part in payload.get("parts", []):
-        result = _extract_html_body(part)
-        if result:
-            return result
-
-    return ""
+    _collect(payload)
+    return html_part or plain_part

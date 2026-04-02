@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -101,22 +102,51 @@ Job Description (excerpt):
 Reply with exactly one word: YES or NO"""
 
 
+_NORMALIZE_PROMPT = """\
+Extract clean structured data from this raw job posting info.
+Return ONLY valid JSON with these exact keys: role, company, location, pay_range.
+
+Rules:
+- role: clean job title only. Remove location info, work mode (WFH/onsite/hybrid), \
+company name, parenthetical codes, and trailing suffixes. Example: \
+"AI Automation Specialist (dbb) - Permanent WFH/Morning" → "AI Automation Specialist"
+- company: company name only, no extra text
+- location: city and country, or "Remote", or "Hybrid - <city>". Extract from any field.
+- pay_range: salary/pay range if found anywhere (title, location, pay, description). \
+Include currency and period (e.g. "PHP 50,000–80,000/month"). Empty string if not found.
+
+Raw title: {raw_title}
+Raw company: {raw_company}
+Raw location: {raw_location}
+Raw pay: {raw_pay}
+Description excerpt: {desc_excerpt}
+
+JSON:"""
+
+
 _ASSESS_PROMPT = """\
 You are a career advisor assessing how well a candidate matches a job posting.
 
-Rate the candidate's fit as WEAK, MODERATE, or STRONG using this scale:
-  STRONG   — Meets most requirements; skills and experience are a clear match.
-  MODERATE — Meets some requirements; has relevant experience but notable gaps.
+Rate the fit as STRONG, MODERATE, or WEAK:
+  STRONG   — Meets most requirements; skills and experience clearly match.
+  MODERATE — Meets some requirements; relevant experience but notable gaps.
   WEAK     — Significant gaps in required skills or experience level.
 
-After the rating, write a 2-3 sentence explanation covering:
-  - Key matching skills or experiences
-  - Important gaps or missing qualifications
-  - Overall recommendation
+Extract 5-8 key requirements from the job description and check each against the resume.
 
-Format your response EXACTLY like this (two lines):
-RATING: <WEAK|MODERATE|STRONG>
-EXPLANATION: <your 2-3 sentence explanation>
+Return ONLY valid JSON with this exact structure:
+{{
+  "rating": "STRONG|MODERATE|WEAK",
+  "match_rows": [
+    {{"requirement": "...", "my_resume": "...", "fit": "MATCH|PARTIAL|GAP"}}
+  ],
+  "summary": "One sentence: overall fit recommendation."
+}}
+
+fit values:
+  MATCH   — resume clearly satisfies this requirement
+  PARTIAL — resume partially meets it or has related experience
+  GAP     — requirement not met by resume
 
 ---
 JOB TITLE: {title}
@@ -159,8 +189,27 @@ async def _is_ai_ml(llm, job: JobData) -> bool:
     return resp.content.strip().upper().startswith("YES")
 
 
-async def _assess(llm, job: JobData, resume: str) -> tuple[str, str]:
-    """Returns (strength, explanation)."""
+async def _normalize_fields(llm, job: JobData) -> tuple[str, str]:
+    """Returns (normalized_role, normalized_pay) extracted by LLM."""
+    desc_excerpt = job.description[:500] if job.description else ""
+    resp = await llm.ainvoke([HumanMessage(content=_NORMALIZE_PROMPT.format(
+        raw_title=job.title,
+        raw_company=job.company,
+        raw_location=job.location,
+        raw_pay=job.pay,
+        desc_excerpt=desc_excerpt,
+    ))])
+    try:
+        # Strip markdown fences if present
+        text = resp.content.strip().strip("```json").strip("```").strip()
+        data = json.loads(text)
+        return data.get("role", ""), data.get("pay_range", "")
+    except Exception:
+        return "", ""
+
+
+async def _assess(llm, job: JobData, resume: str) -> tuple[str, str, list[dict]]:
+    """Returns (strength, summary, match_breakdown)."""
     description_excerpt = job.description[:3000] if job.description else "(no description available)"
     resume_excerpt = resume[:3000]
 
@@ -172,10 +221,23 @@ async def _assess(llm, job: JobData, resume: str) -> tuple[str, str]:
     ))])
 
     text = resp.content.strip()
+
+    # Try JSON parse first
+    try:
+        json_text = text.strip("```json").strip("```").strip()
+        data = json.loads(json_text)
+        strength = data.get("rating", "MODERATE").upper()
+        if strength not in ("WEAK", "MODERATE", "STRONG"):
+            strength = "MODERATE"
+        summary = data.get("summary", "")
+        match_breakdown = data.get("match_rows", [])
+        return strength, summary, match_breakdown
+    except Exception:
+        pass
+
+    # Fallback: old line-based parse
     strength = "MODERATE"
     explanation = text
-
-    # Parse structured response
     for line in text.splitlines():
         line = line.strip()
         if line.upper().startswith("RATING:"):
@@ -184,8 +246,7 @@ async def _assess(llm, job: JobData, resume: str) -> tuple[str, str]:
                 strength = val
         elif line.upper().startswith("EXPLANATION:"):
             explanation = line.split(":", 1)[1].strip()
-
-    return strength, explanation
+    return strength, explanation, []
 
 
 async def _summarise(llm, job: JobData) -> str:
@@ -236,10 +297,12 @@ async def job_screener_node(state: dict) -> dict:
                 print(f"[job_screener] NOT AI/ML — skip: {job.title!r} @ {job.company}")
                 continue
 
-            # Step 2 & 3 — assess + summarise in parallel
-            strength_task = asyncio.create_task(_assess(llm, job, resume_text))
-            summary_task  = asyncio.create_task(_summarise(llm, job))
-            strength, explanation = await strength_task
+            # Step 2, 3, 4 — normalize + assess + summarise in parallel
+            normalize_task = asyncio.create_task(_normalize_fields(llm, job))
+            strength_task  = asyncio.create_task(_assess(llm, job, resume_text))
+            summary_task   = asyncio.create_task(_summarise(llm, job))
+            normalized_role, normalized_pay = await normalize_task
+            strength, explanation, match_breakdown = await strength_task
             summary = await summary_task
 
             assessed_job = AssessedJob(
@@ -251,10 +314,13 @@ async def job_screener_node(state: dict) -> dict:
                 pay=job.pay,
                 description=job.description,
                 scrape_source=job.source,
+                normalized_role=normalized_role,
+                normalized_pay=normalized_pay,
                 is_ai_ml=True,
                 description_summary=summary,
                 resume_strength=strength,
                 strength_explanation=explanation,
+                match_breakdown=match_breakdown,
                 date_added=today,
             )
             assessed.append(assessed_job)

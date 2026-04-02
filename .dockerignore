@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+.env
+resume.md
+credentials.json
+.gmail_token.json
+.gdrive_token.json
+brainstorming/
+.claude/
+*.xlsx
+*.pdf

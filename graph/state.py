@@ -6,7 +6,7 @@ Each node returns a PATCH (dict with only the keys it updates).
 LangGraph merges patches via the reducers defined here.
 
 State lifecycle:
-  email_screener     → sets spreadsheet_id, job_urls_by_site, glassdoor_contexts
+  email_screener     → sets spreadsheet_id, job_urls_by_site, email_contexts
   scrape_site (×N)   → accumulates raw_job_listings per site (merge reducer)
   job_screener       → sets assessed_jobs
   sheets_updater     → sets new_jobs
@@ -40,25 +40,34 @@ class AssessedJob:
     description: str          # raw text used for assessment
     scrape_source: str        # "api" | "scraped" | "email_fallback"
 
-    # From job_screener
+    # From job_screener — AI-normalized fields
+    normalized_role: str = ""         # clean role name (no location/mode suffixes)
+    normalized_pay: str = ""          # pay range extracted/normalized by LLM
+
+    # From job_screener — assessment
     is_ai_ml: bool = False
     description_summary: str = ""
-    resume_strength: str = ""       # WEAK | MODERATE | STRONG
-    strength_explanation: str = ""
+    resume_strength: str = ""         # WEAK | MODERATE | STRONG
+    strength_explanation: str = ""    # 1-sentence summary
+    match_breakdown: list = None      # [{requirement, my_resume, fit}] for email table
     date_added: str = ""
+
+    def __post_init__(self):
+        if self.match_breakdown is None:
+            self.match_breakdown = []
 
     def to_sheet_row(self) -> list[Any]:
         """Return values in Jobs sheet column order."""
         from datetime import datetime
         return [
-            self.title,
+            self.normalized_role or self.title,
             self.company,
             self.description_summary,
             self.site,
             self.url,
             self.resume_strength,
             self.strength_explanation,
-            self.pay,
+            self.normalized_pay or self.pay,
             self.date_added or datetime.now().strftime("%Y-%m-%d"),
             "Active",
         ]
@@ -93,7 +102,10 @@ class AgentState(TypedDict):
     # Set by email_screener
     spreadsheet_id: str
     job_urls_by_site: dict[str, list[str]]          # site → [url, ...]
-    glassdoor_contexts: dict[str, dict]              # url → email card data
+    email_contexts: dict[str, dict]                  # url → email card data (all sites)
+
+    # Pre-loaded emails injected by Cloud Function trigger (bypasses Gmail search)
+    injected_emails: list[dict]
 
     # Accumulated from parallel scrape_site nodes (merge reducer)
     raw_job_listings: Annotated[

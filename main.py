@@ -128,14 +128,15 @@ async def run_graph() -> None:
 
     # Initial state — all fields have sensible defaults
     initial_state = {
-        "spreadsheet_id":     "",
-        "job_urls_by_site":   {},
-        "glassdoor_contexts": {},
-        "raw_job_listings":   {},
-        "assessed_jobs":      [],
-        "new_jobs":           [],
-        "notified":           False,
-        "errors":             [],
+        "spreadsheet_id":   "",
+        "job_urls_by_site": {},
+        "email_contexts":   {},
+        "injected_emails":  [],
+        "raw_job_listings": {},
+        "assessed_jobs":    [],
+        "new_jobs":         [],
+        "notified":         False,
+        "errors":           [],
     }
 
     result = await graph.ainvoke(initial_state)
@@ -150,7 +151,8 @@ async def run_graph() -> None:
     if new_jobs:
         print("\nNew jobs added this run:")
         for job in new_jobs:
-            print(f"  [{job.resume_strength:8s}] {job.title} @ {job.company} ({job.site})")
+            role = job.normalized_role or job.title
+            print(f"  [{job.resume_strength:8s}] {role} @ {job.company} ({job.site})")
 
     print("=" * 60)
 

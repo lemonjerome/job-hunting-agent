@@ -11,11 +11,13 @@ Dispatches to the correct per-site strategy:
   Indeed     → Playwright + stealth (Cloudflare-aware)
   Glassdoor  → Playwright + stealth → email card fallback if blocked
 
+All sites receive email_contexts for fallback in case scraping fails.
+
 Input  (via Send): {
-    "site"               : str,
-    "urls"               : [str, ...],
-    "spreadsheet_id"     : str,
-    "glassdoor_contexts" : { url: {title, company, ...} }   # Glassdoor only
+    "site"           : str,
+    "urls"           : [str, ...],
+    "spreadsheet_id" : str,
+    "email_contexts" : { url: {title, company, location, pay, rating} }
 }
 Output (state patch): { "raw_job_listings": { site: [JobData, ...] } }
 """
@@ -36,7 +38,8 @@ async def scrape_site_node(state: dict) -> dict:
     site: str = state["site"]
     urls: list[str] = state.get("urls", [])
     spreadsheet_id: str = state["spreadsheet_id"]
-    glassdoor_contexts: dict = state.get("glassdoor_contexts", {})
+    # All sites now have email card context available as scraper fallback
+    email_contexts: dict = state.get("email_contexts", {})
 
     if not urls:
         return {"raw_job_listings": {site: []}}
@@ -53,8 +56,8 @@ async def scrape_site_node(state: dict) -> dict:
     listings: list[JobData] = []
 
     for url in new_urls:
-        # Glassdoor: pass email card context for fallback
-        email_ctx = glassdoor_contexts.get(url) if site == "glassdoor" else None
+        # Pass email card context for all sites — used as fallback if page is blocked
+        email_ctx = email_contexts.get(url)
 
         try:
             job = await scrape_job(site, url, email_ctx)
