@@ -802,11 +802,83 @@ SCRAPERS = {
     "indeed":    scrape_indeed,
 }
 
+async def _enrich_with_jobspy(job: JobData) -> JobData:
+    """
+    For email-fallback jobs with no description, search JobSpy to find the full
+    job description. JobSpy is synchronous — runs in a thread via asyncio.to_thread.
+
+    Supports: linkedin, indeed, glassdoor. Skips: jobstreet (not in JobSpy).
+    Returns the original job unchanged if enrichment fails or finds nothing.
+    """
+    try:
+        from jobspy import scrape_jobs
+    except ImportError:
+        return job  # python-jobspy not installed — skip silently
+
+    _JOBSPY_SITES = {"linkedin": "linkedin", "indeed": "indeed", "glassdoor": "glassdoor"}
+    jobspy_site = _JOBSPY_SITES.get(job.site)
+    if not jobspy_site or not job.title:
+        return job
+
+    title = job.title
+    company_lower = (job.company or "").lower()
+    title_prefix = title.lower()[:25]
+
+    def _search() -> str:
+        try:
+            results = scrape_jobs(
+                site_name=[jobspy_site],
+                search_term=title,
+                location="Philippines",
+                results_wanted=10,
+                country_indeed="Philippines",
+                linkedin_fetch_description=True,
+                hours_old=168,  # look back 1 week
+                verbose=0,
+            )
+        except Exception:
+            return ""
+
+        if results is None or results.empty:
+            return ""
+
+        for _, row in results.iterrows():
+            rt = (row.get("title") or "").lower()
+            rc = (row.get("company") or "").lower()
+            desc = str(row.get("description") or "").strip()
+            if not desc:
+                continue
+            if title_prefix in rt or (company_lower and company_lower in rc):
+                return desc[:5000]
+
+        # No close match — best-effort: first result
+        first_desc = str(results.iloc[0].get("description") or "").strip()
+        return first_desc[:5000] if first_desc else ""
+
+    try:
+        description = await asyncio.to_thread(_search)
+    except Exception:
+        return job
+
+    if description:
+        return JobData(
+            url=job.url, site=job.site,
+            title=job.title, company=job.company,
+            location=job.location, pay=job.pay,
+            description=description,
+            source="jobspy",
+            blocked=False,
+        )
+    return job
+
+
 async def scrape_job(site: str, url: str, email_context: dict | None = None) -> JobData:
     """
     Dispatch to the correct scraper for the given site.
     email_context (from email card parser) is used as fallback data if scraping fails.
     Glassdoor uses it directly; other sites fall back to it only when blocked.
+    If the email fallback is used and leaves description empty, JobSpy is tried
+    to enrich with a full job description (LinkedIn/Indeed/Glassdoor only).
     """
     if site == "glassdoor":
         return await scrape_glassdoor(url, email_context)
@@ -820,7 +892,7 @@ async def scrape_job(site: str, url: str, email_context: dict | None = None) -> 
     # For non-Glassdoor sites: if scraping returned blocked/empty AND we have
     # email card context, backfill the missing fields from the email data.
     if email_context and (job.blocked or (not job.title and not job.company)):
-        return JobData(
+        job = JobData(
             url=url,
             site=site,
             title=email_context.get("title", ""),
@@ -831,5 +903,12 @@ async def scrape_job(site: str, url: str, email_context: dict | None = None) -> 
             source="email_fallback",
             blocked=False,
         )
+
+    # For email-fallback jobs with no description, try JobSpy to get a description
+    # so the LLM assessment has real data instead of "(no description available)".
+    if job.source == "email_fallback" and not job.description and job.title:
+        job = await _enrich_with_jobspy(job)
+        if job.source == "jobspy":
+            print(f"[browser] JobSpy enriched: {job.title!r} @ {job.company}")
 
     return job

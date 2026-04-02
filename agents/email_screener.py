@@ -138,19 +138,19 @@ async def _resolve_card_urls(cards: dict[str, dict], site: str) -> dict[str, dic
 
     resolved: dict[str, dict] = {}
     for original, final in zip(tracking_urls, resolved_urls):
-        # For sites with a canonical pattern, only keep URLs that are actual job pages
-        if canonical_pattern:
-            # Jobstreet: canonical URL contains /job/\d+
-            # Indeed: canonical URL contains /viewjob
-            # Build a stricter check for the final resolved URL
-            is_canonical = (
-                ("jobstreet.com/job/" in final) or
-                ("indeed.com/viewjob" in final) or
-                ("pagead/clk" in final) or    # both /clk and /clk/dl tracking formats
-                (site not in ("jobstreet", "indeed"))  # pass-through for other sites
-            )
-            if not is_canonical:
-                continue  # discard image CDN / homepage / unsubscribe URLs
+        # Use the same pattern that identified these as job links in the email HTML.
+        # This handles all URL variants: ph.jobstreet.com, jobstreet.com.ph,
+        # cts.indeed.com/v3/, pagead/clk, etc. — without hardcoded string checks.
+        if canonical_pattern and not canonical_pattern.search(final):
+            if final == original:
+                # Resolution FAILED (timeout / geo-block from Cloud Run).
+                # Keep the original tracking URL so the scraper can fall back to
+                # email card data rather than silently dropping this job.
+                resolved[original] = cards[original]
+                print(f"[email_screener] redirect failed — keeping tracking URL for fallback: ...{original[-60:]}")
+            # else: redirect succeeded but landed on a non-job page
+            # (homepage, unsubscribe, logo CDN) — discard.
+            continue
 
         ctx = cards[original]
         resolved[final] = ctx
