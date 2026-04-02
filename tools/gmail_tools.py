@@ -24,7 +24,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from bs4 import BeautifulSoup
 
-from config import EMAIL_LOOKBACK_HOURS, EMAIL_SENDERS, GMAIL_CREDENTIALS
+from config import EMAIL_LOOKBACK_HOURS, EMAIL_SENDERS, GMAIL_CREDENTIALS, IS_CLOUD_RUN, GMAIL_TOKEN_SECRET, get_secret
 
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN_PATH = ROOT / ".gmail_token.json"
@@ -66,15 +66,27 @@ _TRACKING_DOMAINS: dict[str, re.Pattern] = {
 
 def _get_gmail_service():
     creds = None
-    if TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+
+    if IS_CLOUD_RUN and GMAIL_TOKEN_SECRET:
+        # Cloud Run: load token JSON from Secret Manager
+        token_json = get_secret(GMAIL_TOKEN_SECRET)
+        creds = Credentials.from_authorized_user_info(
+            __import__("json").loads(token_json), SCOPES
+        )
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CREDENTIALS, SCOPES)
-            creds = flow.run_local_server(port=0)
-        TOKEN_PATH.write_text(creds.to_json())
+    else:
+        # Local: load from file, refresh or re-auth as needed
+        if TOKEN_PATH.exists():
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CREDENTIALS, SCOPES)
+                creds = flow.run_local_server(port=0)
+            TOKEN_PATH.write_text(creds.to_json())
+
     return build("gmail", "v1", credentials=creds)
 
 

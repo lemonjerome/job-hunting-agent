@@ -4,6 +4,23 @@ from langchain_ollama import ChatOllama
 
 load_dotenv()
 
+# --- Cloud Run detection ---
+# When running on Cloud Run, credentials are fetched from Secret Manager at runtime.
+# Locally, they are read from files referenced by env vars.
+GCP_PROJECT: str = os.getenv("GCP_PROJECT", "")
+GMAIL_TOKEN_SECRET: str = os.getenv("GMAIL_TOKEN_SECRET", "")  # Secret Manager secret name
+IS_CLOUD_RUN: bool = bool(os.getenv("K_SERVICE"))  # Cloud Run sets K_SERVICE automatically
+
+
+def get_secret(secret_name: str) -> str:
+    """Fetch a secret value from Secret Manager (used on Cloud Run)."""
+    from google.cloud import secretmanager
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{GCP_PROJECT}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode("utf-8")
+
+
 # --- Ollama Cloud ---
 OLLAMA_BASE_URL: str = os.environ["OLLAMA_BASE_URL"]
 OLLAMA_API_KEY: str = os.environ["OLLAMA_API_KEY"]
@@ -20,11 +37,11 @@ def get_llm(temperature: float = 0.0) -> ChatOllama:
     )
 
 
-# --- Gmail MCP ---
-GMAIL_CREDENTIALS: str = os.environ["GMAIL_CREDENTIALS"]
-
-# --- GDrive / Sheets MCP ---
-GDRIVE_CREDENTIALS: str = os.environ["GDRIVE_CREDENTIALS"]
+# --- Gmail / GDrive credentials ---
+# On Cloud Run: token is loaded from Secret Manager at runtime (no local file needed).
+# Locally: use the file path from env vars.
+GMAIL_CREDENTIALS: str = os.getenv("GMAIL_CREDENTIALS", "")
+GDRIVE_CREDENTIALS: str = os.getenv("GDRIVE_CREDENTIALS", "")
 
 # --- Notifications ---
 SELF_EMAIL: str = os.environ["SELF_EMAIL"]

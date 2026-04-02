@@ -31,6 +31,8 @@ from config import (
     SHEET_EMAILS,
     SHEET_JOBS,
     SHEET_RESUME,
+    IS_CLOUD_RUN,
+    get_secret,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,15 +69,26 @@ RESUME_HEADERS = [
 
 def _get_credentials() -> Credentials:
     creds = None
-    if TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+
+    if IS_CLOUD_RUN:
+        # Cloud Run: load GDrive/Sheets token from Secret Manager
+        token_json = get_secret("gdrive-oauth-token")
+        creds = Credentials.from_authorized_user_info(
+            __import__("json").loads(token_json), SCOPES
+        )
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(GDRIVE_CREDENTIALS, SCOPES)
-            creds = flow.run_local_server(port=0)
-        TOKEN_PATH.write_text(creds.to_json())
+    else:
+        if TOKEN_PATH.exists():
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(GDRIVE_CREDENTIALS, SCOPES)
+                creds = flow.run_local_server(port=0)
+            TOKEN_PATH.write_text(creds.to_json())
+
     return creds
 
 
