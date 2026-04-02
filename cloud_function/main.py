@@ -232,7 +232,7 @@ def handle_gmail_notification(request):
             resp = requests.post(
                 AGENT_URL.rstrip("/") + "/process",
                 json=payload,
-                timeout=310,  # Cloud Run max request timeout is 300s
+                timeout=530,  # Cloud Function timeout is 540s — give Cloud Run 530s to respond
             )
             print(
                 f"[gmail-trigger] Dispatched {site} email '{subject}' → "

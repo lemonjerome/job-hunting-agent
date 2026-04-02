@@ -71,7 +71,7 @@ jobs:
             --platform managed \
             --memory 1Gi \
             --cpu 1 \
-            --timeout 300 \
+            --timeout 3600 \
             --concurrency 1 \
             --max-instances 3 \
             --service-account "job-agent-runner@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com" \
@@ -139,7 +139,7 @@ jobs:
             --trigger-http \
             --allow-unauthenticated \
             --memory 256Mi \
-            --timeout 120s \
+            --timeout 540s \
             --service-account "job-agent-runner@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com" \
             --set-env-vars "\
               AGENT_CLOUD_RUN_URL=${{ steps.cloud-run-url.outputs.url }},\
