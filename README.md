@@ -60,7 +60,7 @@ Each step is a LangGraph node sharing a typed state object. The four site scrape
 ## Features
 
 ### Email Screening
-Reads incoming job alert emails from LinkedIn, Jobstreet, Glassdoor, and Indeed. Skips any email already logged in the `Emails Seen` sheet tab to avoid double-processing. Uses the LLM to verify the email is actually an AI/ML job alert — filters out "LiNa" recommendations, premium upsells, profile tips, and unrelated roles.
+Reads incoming job alert emails from LinkedIn, Jobstreet, Glassdoor, and Indeed. Skips any email already logged in the `Emails Seen` sheet tab to avoid double-processing. Uses the LLM to verify the email is actually an AI/ML job alert — filters out "LiNa" recommendations, premium upsells, profile tips, and unrelated roles. When card titles are available (extracted from the email HTML), the LLM verdict is based on the actual job titles rather than the raw email body — more accurate and immune to HTML noise.
 
 ### Smart URL Extraction (All 4 Sites)
 Parses job card HTML from emails to extract direct job posting URLs and card context (title, company, location, pay). Each site uses a different strategy:
@@ -73,8 +73,13 @@ Parses job card HTML from emails to extract direct job posting URLs and card con
 ### Stealth Browser Scraping
 Visits each job URL using headless Playwright with playwright-stealth: spoofed Mac user-agent, real 1440×900 viewport, randomised human-like scroll timing. Uses guest/public API endpoints where available (LinkedIn guest API, Jobstreet GraphQL) to avoid login walls.
 
-### Email Card Fallback
-When scraping is blocked or returns empty data, the agent falls back to the card context parsed directly from the email HTML (title, company, location, pay, rating). This means every site always produces a result even when the job page is behind a login wall.
+### LLM-Assisted Page Extraction
+When a page loads but CSS selectors return empty fields (class names change frequently on LinkedIn, Indeed, and Glassdoor), the raw page text is passed to the LLM with a structured extraction prompt. The LLM extracts title, company, location, pay, and description — and also signals if the page is a login wall or CAPTCHA. This makes scraping resilient to site layout changes without any code changes.
+
+### Email Card Fallback + Description Snippet
+When scraping is blocked or returns empty data, the agent falls back to the card context parsed directly from the email HTML (title, company, location, pay, rating). Indeed and Glassdoor emails also include a 1–2 sentence job description preview inside each card — this snippet is extracted and used as the description, giving the LLM assessment real content even without visiting the job page.
+
+For LinkedIn, Indeed, and Glassdoor jobs that reach the sheet via email fallback with no description, JobSpy (`python-jobspy`) searches for the job by title to retrieve the full description.
 
 ### AI Field Normalization
 Raw scraped titles are often noisy: `"Urgently hiringSenior AI Engineer (AI)Rivington PartnersMandaluyong City..."`. An LLM normalization step strips prefixes, suffixes, location fragments, and company name from the title to produce clean `normalized_role` and `normalized_pay` fields used in the sheet and notification email.
@@ -114,6 +119,7 @@ Gmail Watch API publishes inbox events to a Cloud Pub/Sub topic in real time. A 
 | Orchestration | [LangGraph](https://github.com/langchain-ai/langgraph) `StateGraph` with `Send()` fan-out |
 | LLM | `minimax-m2.7` via [Ollama Cloud API](https://ollama.com) |
 | Browser automation | [Playwright](https://playwright.dev) + [playwright-stealth](https://github.com/AtuboDad/playwright_stealth) |
+| Job description enrichment | [JobSpy](https://github.com/speedyapply/JobSpy) (`python-jobspy`) — searches LinkedIn/Indeed/Glassdoor for descriptions when individual page scraping is blocked |
 | Email + Drive | Gmail API + Google Drive API + Sheets API (`google-api-python-client`) |
 | HTML parsing | BeautifulSoup4 |
 | Agent server | FastAPI + Uvicorn |

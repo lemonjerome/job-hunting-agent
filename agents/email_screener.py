@@ -219,15 +219,17 @@ async def email_screener_node(state: dict) -> dict:
         email_contexts.update(card_contexts)
 
         # --- AI/ML verdict ---
-        if card_contexts:
-            # Use extracted job titles — more reliable than raw truncated HTML
-            titles = "\n".join(
-                f"- {ctx['title']}" for ctx in card_contexts.values() if ctx.get("title")
-            )
+        titles = "\n".join(
+            f"- {ctx['title']}" for ctx in card_contexts.values() if ctx.get("title")
+        )
+        if titles:
+            # Card titles available — more reliable signal than raw HTML
             verdict_resp = await llm.ainvoke([HumanMessage(content=_CARD_AI_ML_PROMPT.format(
                 subject=subject, titles=titles,
             ))])
         else:
+            # No card titles extracted (parser found URLs but no text, or no cards at all)
+            # Fall back to full email body for the verdict
             verdict_resp = await llm.ainvoke([HumanMessage(content=_IS_AI_ML_PROMPT.format(
                 subject=subject, body_excerpt=body_excerpt,
             ))])

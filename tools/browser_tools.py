@@ -31,7 +31,7 @@ from typing import Any
 import aiohttp
 from bs4 import BeautifulSoup
 
-from config import STEALTH_USER_AGENT, STEALTH_VIEWPORT
+from config import STEALTH_USER_AGENT, STEALTH_VIEWPORT, get_llm
 
 try:
     from playwright.async_api import async_playwright, Page
@@ -95,6 +95,56 @@ async def _human_scroll(page: Page) -> None:
         await asyncio.sleep(random.uniform(0.7, 1.4))
 
 
+async def _llm_extract_from_page_text(page_text: str, site: str) -> dict:
+    """
+    Use the LLM to extract job fields from raw page text when CSS/DOM selectors
+    return empty results (e.g. after a page layout change) or to detect blocked pages.
+
+    Called as a fallback inside each site scraper when the structured extraction
+    is incomplete. Returns a dict with keys: title, company, location, pay,
+    description. Returns {} if the LLM determines the page is a login wall,
+    CAPTCHA, or any other non-job-content page.
+    """
+    from langchain_core.messages import HumanMessage
+
+    text = page_text[:6000]
+    prompt = f"""\
+You are parsing a {site} job posting page. Extract the job details from the
+page text below. Return ONLY valid JSON — no prose, no markdown fences.
+
+If the page is a login wall, CAPTCHA, "verify you're human", 403, or any
+blocked/non-job page — return exactly: {{"blocked": true}}
+
+Otherwise extract what is visible (leave fields as empty string if absent):
+{{
+  "blocked": false,
+  "title": "",
+  "company": "",
+  "location": "",
+  "pay": "",
+  "description": ""
+}}
+
+The "description" field should contain the job responsibilities and requirements
+(up to 2000 characters). Do not include boilerplate like "Easy Apply" or site UI text.
+
+Page text ({site}):
+{text}
+
+JSON:"""
+
+    try:
+        llm = get_llm(temperature=0.0)
+        resp = await llm.ainvoke([HumanMessage(content=prompt)])
+        raw = resp.content.strip().strip("```json").strip("```").strip()
+        data = json.loads(raw)
+        if data.get("blocked"):
+            return {}
+        return {k: str(v or "").strip() for k, v in data.items() if k != "blocked"}
+    except Exception:
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # LinkedIn — Guest API (no Playwright)
 # ---------------------------------------------------------------------------
@@ -156,6 +206,20 @@ async def scrape_linkedin(url: str) -> JobData:
     )
     pay = _text("[class*='salary']") or _text("[class*='compensation']")
     description = _text(".show-more-less-html__markup") or _text("[class*='description']")
+
+    # If CSS selectors missed the description (class names may have changed),
+    # fall back to LLM extraction on the full page text.
+    if not description:
+        page_text = soup.get_text(" ", strip=True)
+        extra = await _llm_extract_from_page_text(page_text, "linkedin")
+        if extra:
+            title = title or extra.get("title", "")
+            company = company or extra.get("company", "")
+            location = location or extra.get("location", "")
+            pay = pay or extra.get("pay", "")
+            description = extra.get("description", "")
+            if description:
+                print(f"[linkedin] LLM extracted description for job {job_id}")
 
     return JobData(
         url=url, site="linkedin",
@@ -308,6 +372,23 @@ async def scrape_indeed(url: str) -> JobData:
             pay = await _get("span[data-testid='attribute_snippet_testid']")
             description = await _get("div#jobDescriptionText")
 
+            # If CSS selectors missed the description (data-testid values may have
+            # changed), use LLM to extract from full page text.
+            if not description:
+                try:
+                    page_text = await page.inner_text("body")
+                    extra = await _llm_extract_from_page_text(page_text, "indeed")
+                    if extra:
+                        title = title or extra.get("title", "")
+                        company = company or extra.get("company", "")
+                        location = location or extra.get("location", "")
+                        pay = pay or extra.get("pay", "")
+                        description = extra.get("description", "")
+                        if description:
+                            print(f"[indeed] LLM extracted description for {url[-50:]}")
+                except Exception:
+                    pass
+
             return JobData(
                 url=url, site="indeed",
                 title=title, company=company, location=location,
@@ -383,6 +464,23 @@ async def scrape_glassdoor(url: str, email_context: dict | None = None) -> JobDa
                 await _get("span.JobDetails_salaryEstimate__arV5J")
             )
             description = await _get("div.JobDetails_jobDescription__uW_fK")
+
+            # If CSS selectors missed fields (Glassdoor frequently changes class names),
+            # use LLM to extract from full page text before falling back to email.
+            if not title or not description:
+                try:
+                    page_text = await page.inner_text("body")
+                    extra = await _llm_extract_from_page_text(page_text, "glassdoor")
+                    if extra:
+                        title = title or extra.get("title", "")
+                        company = company or extra.get("company", "")
+                        location = location or extra.get("location", "")
+                        pay = pay or extra.get("pay", "")
+                        description = description or extra.get("description", "")
+                        if extra.get("title") or extra.get("description"):
+                            print(f"[glassdoor] LLM extracted fields for {url[-50:]}")
+                except Exception:
+                    pass
 
             # If the page rendered but gave us nothing useful, fall back to email
             if not title and not company:
@@ -523,7 +621,32 @@ def _card_context_from_element(card_el, link) -> dict:
         if rating_match:
             rating = f"{rating_match.group(1)} ★"
 
-    return {"title": title, "company": company, "location": location, "pay": pay, "rating": rating}
+    # Description snippet — some sites (Indeed, Glassdoor) include a 1-2 sentence
+    # job description preview inside the email card. Extract the longest paragraph
+    # that doesn't match UI noise and isn't already captured in other fields.
+    _SNIPPET_NOISE = re.compile(
+        r"^(easy apply|apply now|quickly apply|actively recruit|recently posted|"
+        r"view job|see job|responsive employer|urgently hir|new$|logo$|"
+        r"this company is actively|\d+ (school alumni|applicants))",
+        re.I,
+    )
+    captured_texts = {title, company, location, pay, rating}
+    snippet = ""
+    for node in card_el.find_all(string=True):
+        t = node.strip()
+        if len(t) < 80:
+            continue
+        if t in captured_texts:
+            continue
+        if _SNIPPET_NOISE.search(t):
+            continue
+        snippet = t[:500]
+        break
+
+    return {
+        "title": title, "company": company, "location": location,
+        "pay": pay, "rating": rating, "snippet": snippet,
+    }
 
 
 def _find_card_container(link, min_text_len: int = 40):
@@ -899,7 +1022,9 @@ async def scrape_job(site: str, url: str, email_context: dict | None = None) -> 
             company=email_context.get("company", ""),
             location=email_context.get("location", ""),
             pay=email_context.get("pay", ""),
-            description="",
+            # Use the description snippet extracted from the email card if available.
+            # Indeed and Glassdoor emails include a 1-2 sentence job preview.
+            description=email_context.get("snippet", ""),
             source="email_fallback",
             blocked=False,
         )
