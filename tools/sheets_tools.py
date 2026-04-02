@@ -1,7 +1,7 @@
 """
 GDrive / Google Sheets tool wrappers.
 
-Manages the single "Job Applications" GSheet file with 3 tabs:
+Manages the single "Job Hunting" GSheet file with 3 tabs:
   - Jobs          : assessed job postings
   - Emails Seen   : processed email log (deduplication)
   - Resume Versions: resume metadata + LLM summary
@@ -106,7 +106,7 @@ def _drive_service():
 
 def get_or_create_sheet() -> str:
     """
-    Find the 'Job Applications' spreadsheet in the 'Job Application' GDrive folder.
+    Find the 'Job Hunting' spreadsheet in the 'Job Hunting' GDrive folder.
     If it doesn't exist, create it with the 3 required tabs and header rows.
     Returns the spreadsheet ID.
     """

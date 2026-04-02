@@ -1,7 +1,7 @@
 """
 Phase 1 — Resume conversion + version tracking script.
 
-Finds the resume PDF (set via RESUME_FILENAME env var) in GDrive "Job Application" folder,
+Finds the resume PDF (set via RESUME_FILENAME env var) in GDrive "Job Hunting" folder,
 converts it to text (for LLM use at runtime — never committed to repo),
 and logs file metadata + a short LLM summary to the "Resume Versions" GSheet tab.
 
@@ -76,7 +76,7 @@ async def main() -> None:
     print(f"Searching for '{RESUME_FILENAME}' in GDrive...")
     meta = find_resume_in_gdrive()
     if not meta:
-        print(f"ERROR: '{RESUME_FILENAME}' not found in GDrive 'Job Application' folder.")
+        print(f"ERROR: '{RESUME_FILENAME}' not found in GDrive 'Job Hunting' folder.")
         sys.exit(1)
 
     print(f"Found: {meta['name']}  (modified: {meta['modifiedTime']})")

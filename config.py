@@ -47,8 +47,8 @@ GDRIVE_CREDENTIALS: str = os.getenv("GDRIVE_CREDENTIALS", "")
 SELF_EMAIL: str = os.environ["SELF_EMAIL"]
 
 # --- GDrive targets ---
-GDRIVE_FOLDER: str = "Job Application"
-GSHEET_FILE_NAME: str = "Job Applications"
+GDRIVE_FOLDER: str = "Job Hunting"
+GSHEET_FILE_NAME: str = "Job Hunting"
 
 # --- GSheet tab names ---
 SHEET_JOBS: str = "Jobs"

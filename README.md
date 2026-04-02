@@ -89,7 +89,7 @@ Used for:
 - A [Google Cloud Console](https://console.cloud.google.com) account
 - An [Ollama Cloud](https://ollama.com) account (free tier works)
 - A Gmail account where you receive job alerts
-- Your resume PDF uploaded to Google Drive in a folder called `Job Application`
+- Your resume PDF uploaded to Google Drive in a folder called `Job Hunting`
 
 ---
 
@@ -169,7 +169,7 @@ After running both, you'll have `.gmail_token.json` and `.gdrive_token.json` in 
 
 ### Step 5 — Upload your resume
 
-Upload your resume PDF to Google Drive in a folder called **`Job Application`**. The filename can be anything — you'll set it as an env var.
+Upload your resume PDF to Google Drive in a folder called **`Job Hunting`**. The filename can be anything — you'll set it as an env var.
 
 Set `RESUME_FILENAME` in your `.env` to match the exact filename (case-sensitive):
 
@@ -252,7 +252,7 @@ The workflow will also run automatically on the cron schedule (6am / 2pm / 10pm 
 
 ## Google Sheets Structure
 
-The script creates and manages a file called `Job Applications` in your `Job Application` Drive folder.
+The script creates and manages a file called `Job Huntings` in your `Job Hunting` Drive folder.
 
 **Jobs tab** — one row per assessed job:
 `Job Role | Company | Description Summary | Site | URL | Resume Strength | Explanation | Pay | Date Added | Status`
@@ -285,6 +285,6 @@ To use this for your own job search:
 1. Set `RESUME_FILENAME` in `.env` (and as a GitHub Secret) to your PDF filename
 2. Optionally update `EMAIL_SENDERS` in `config.py` if you use different job alert senders
 3. Optionally adjust `EMAIL_LOOKBACK_HOURS` (default: 8h, matches the 3×/day schedule)
-4. Upload your resume PDF to Google Drive in a `Job Application` folder
+4. Upload your resume PDF to Google Drive in a `Job Hunting` folder
 5. Follow the setup guide above
 
