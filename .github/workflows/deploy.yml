@@ -79,8 +79,7 @@ jobs:
               OLLAMA_BASE_URL=OLLAMA_BASE_URL:latest,\
               OLLAMA_API_KEY=OLLAMA_API_KEY:latest,\
               SELF_EMAIL=SELF_EMAIL:latest,\
-              RESUME_FILENAME=RESUME_FILENAME:latest,\
-              GCP_PROJECT=GCP_PROJECT:latest" \
+              RESUME_FILENAME=RESUME_FILENAME:latest" \
             --set-env-vars "OLLAMA_MODEL=minimax-m2.7,GCP_PROJECT=${{ secrets.GCP_PROJECT }},GMAIL_TOKEN_SECRET=gmail-oauth-token" \
             --quiet
 
