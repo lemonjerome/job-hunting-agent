@@ -157,17 +157,22 @@ jobs:
           FUNCTION_URL="${{ steps.function-url.outputs.url }}"
           SA="job-agent-runner@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com"
 
-          # Create subscription if it doesn't exist
-          gcloud pubsub subscriptions create gmail-trigger-sub \
-            --topic "${{ env.PUBSUB_TOPIC }}" \
-            --push-endpoint "$FUNCTION_URL" \
-            --push-auth-service-account "$SA" \
-            --ack-deadline 300 \
-            --message-retention-duration 1h \
-            2>/dev/null || \
-          gcloud pubsub subscriptions modify-push-config gmail-trigger-sub \
-            --push-endpoint "$FUNCTION_URL" \
-            --push-auth-service-account "$SA"
+          # Update endpoint if subscription exists, else create it
+          if gcloud pubsub subscriptions describe gmail-trigger-sub \
+              --project "${{ secrets.GCP_PROJECT }}" &>/dev/null; then
+            gcloud pubsub subscriptions modify-push-config gmail-trigger-sub \
+              --push-endpoint "$FUNCTION_URL" \
+              --push-auth-service-account "$SA"
+            echo "Updated existing subscription."
+          else
+            gcloud pubsub subscriptions create gmail-trigger-sub \
+              --topic "${{ env.PUBSUB_TOPIC }}" \
+              --push-endpoint "$FUNCTION_URL" \
+              --push-auth-service-account "$SA" \
+              --ack-deadline 300 \
+              --message-retention-duration 1h
+            echo "Created new subscription."
+          fi
 
           echo "Pub/Sub subscription pointing to $FUNCTION_URL"
 
