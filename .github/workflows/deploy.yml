@@ -64,8 +64,9 @@ jobs:
 
       - name: Deploy Cloud Run service
         run: |
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/${{ env.CLOUD_RUN_SERVICE }}:${{ github.sha }}"
           gcloud run deploy ${{ env.CLOUD_RUN_SERVICE }} \
-            --image "${{ needs.build-and-push.outputs.image }}" \
+            --image "$IMAGE" \
             --region "${{ env.REGION }}" \
             --platform managed \
             --memory 1Gi \
