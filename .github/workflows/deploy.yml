@@ -121,7 +121,12 @@ jobs:
           URL=$(gcloud run services describe ${{ env.CLOUD_RUN_SERVICE }} \
             --region "${{ env.REGION }}" \
             --format "value(status.url)")
+          if [ -z "$URL" ]; then
+            echo "ERROR: Cloud Run URL is empty — service may not be ready."
+            exit 1
+          fi
           echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Cloud Run URL: $URL"
 
       - name: Deploy Cloud Run Function (2nd gen)
         run: |
