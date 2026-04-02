@@ -40,3 +40,6 @@ env/
 
 # OS
 .DS_Store
+
+# Personal notes (not for public repo)
+PROJECT_SUMMARY.md

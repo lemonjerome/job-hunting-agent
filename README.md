@@ -1,55 +1,109 @@
 # Job Hunting Agent
 
-An automated AI/ML job hunting agent that runs 3× daily on GitHub Actions. It monitors job alert emails from LinkedIn, Jobstreet, Glassdoor, and Indeed — extracts direct job posting URLs, visits each page with a stealth browser, assesses fit against your resume, logs results to a Google Sheet, and emails you when a strong match is found.
+An event-driven AI/ML job hunting agent that runs automatically whenever a job alert email hits your inbox. It monitors emails from LinkedIn, Jobstreet, Glassdoor, and Indeed — extracts direct job posting URLs, visits each page with a stealth browser, assesses your resume fit using an LLM, logs everything to a Google Sheet, and sends you a comparison table email for strong matches.
 
 > Built for the Philippines job market. Focuses exclusively on AI, ML, and Data Science roles.
-
----
-
-## Features
-
-- **Email screening** — reads Gmail for job alert emails, skips already-processed ones, and uses an LLM to verify the email is actually an AI/ML job alert (filters out general recommendations and upsells)
-- **Smart URL extraction** — parses direct job posting URLs from email HTML; handles click-tracking redirects (e.g. `e.jobstreet.com`) and multiple domain formats
-- **Glassdoor email fallback** — when Glassdoor's job page blocks scraping, job data (title, company, location, salary, rating) is extracted directly from the email card instead
-- **Stealth browser scraping** — visits each job URL using Playwright with `playwright-stealth` (spoofed Mac user-agent, real viewport, human-like scroll timing)
-- **Resume matching** — compares each job description against your resume; rates fit as `WEAK`, `MODERATE`, or `STRONG` with a 2-3 sentence explanation
-- **Google Sheets logging** — deduplicates and appends new jobs to a `Jobs` tab; tracks processed emails in an `Emails Seen` tab; logs resume versions in a `Resume Versions` tab
-- **Email notification** — sends a self-notification email listing all newly found `STRONG` matches
-- **Scheduled runs** — runs automatically at 6am, 2pm, and 10pm PHT via GitHub Actions cron
 
 ---
 
 ## How It Works
 
 ```
-GitHub Actions (cron: 6am / 2pm / 10pm PHT)
-        │
-        ▼
- email_screener          ← reads Gmail, LLM filters AI/ML emails, extracts job URLs
-        │
-        ├─ no AI/ML emails ──► END
-        │
-        ▼
- scrape_site (parallel)  ← one Playwright scraper per site (LinkedIn / Jobstreet / Glassdoor / Indeed)
-        │
-        ▼
- job_screener            ← LLM confirms AI/ML relevance, rates resume fit, summarises job
-        │
-        ├─ no jobs passed ──► END
-        │
-        ▼
- sheets_updater          ← deduplicates against existing sheet rows, appends new jobs
-        │
-        ├─ no STRONG matches ──► END
-        │
-        ▼
- email_notifier          ← sends Gmail notification with STRONG match listings
-        │
-        ▼
-        END
+Your Gmail inbox
+       │
+       │  Job alert email arrives
+       ▼
+  Gmail Watch API  ──►  Cloud Pub/Sub  ──►  Cloud Function (gmail-trigger)
+                                                     │
+                                                     │  POST /process
+                                                     ▼
+                                            Cloud Run (job-agent)
+                                                     │
+                                    ┌────────────────▼────────────────┐
+                                    │         LangGraph Graph          │
+                                    │                                  │
+                                    │  email_screener                  │
+                                    │    ├─ LLM: is this AI/ML?        │
+                                    │    ├─ parse job cards (4 sites)  │
+                                    │    └─ resolve tracking URLs      │
+                                    │           │                      │
+                                    │    ┌──────┴──────┐               │
+                                    │    ▼  Send() API ▼               │
+                                    │  scrape_linkedin  scrape_indeed  │
+                                    │  scrape_jobstreet scrape_glassdoor│
+                                    │    └──────┬──────┘               │
+                                    │           ▼                      │
+                                    │  job_screener                    │
+                                    │    ├─ LLM: confirm AI/ML         │
+                                    │    ├─ LLM: normalize role/pay    │
+                                    │    ├─ LLM: assess resume fit      │
+                                    │    └─ structured match breakdown  │
+                                    │           │                      │
+                                    │           ▼                      │
+                                    │  sheets_updater                  │
+                                    │    └─ deduplicate + append        │
+                                    │           │                      │
+                                    │           ▼                      │
+                                    │  email_notifier                  │
+                                    │    └─ send comparison table      │
+                                    └──────────────────────────────────┘
+                                                     │
+                                                     ▼
+                                          Google Sheet (Job Hunting)
+                                          + Notification email to you
 ```
 
-Each step is a LangGraph node sharing a single typed state object. Scraper nodes run in parallel using LangGraph's `Send()` API and merge results via a custom reducer.
+Each step is a LangGraph node sharing a typed state object. The four site scrapers run in **parallel** using LangGraph's `Send()` fan-out API and their results are merged by a custom reducer.
+
+---
+
+## Features
+
+### Email Screening
+Reads incoming job alert emails from LinkedIn, Jobstreet, Glassdoor, and Indeed. Skips any email already logged in the `Emails Seen` sheet tab to avoid double-processing. Uses the LLM to verify the email is actually an AI/ML job alert — filters out "LiNa" recommendations, premium upsells, profile tips, and unrelated roles.
+
+### Smart URL Extraction (All 4 Sites)
+Parses job card HTML from emails to extract direct job posting URLs and card context (title, company, location, pay). Each site uses a different strategy:
+
+- **LinkedIn** — anchors on `/jobs/view/{id}` links, strips tracking query params to deduplicate the 3 anchors per job card, upgrades empty-title entries
+- **Jobstreet** — resolves `url.jobstreet.com` SendGrid tracking redirects via HTTP to get canonical `ph.jobstreet.com/job/{id}` URLs
+- **Glassdoor** — splits the concatenated link text (`"Company4.2★Title$pay"`) on the rating regex to extract clean company and title fields
+- **Indeed** — handles `cts.indeed.com/v3/` single-job email format (extracts title from `<h1>`) and `pagead/clk` multi-job tracking URLs; falls back to plain-text email parser for text-only emails
+
+### Stealth Browser Scraping
+Visits each job URL using headless Playwright with playwright-stealth: spoofed Mac user-agent, real 1440×900 viewport, randomised human-like scroll timing. Uses guest/public API endpoints where available (LinkedIn guest API, Jobstreet GraphQL) to avoid login walls.
+
+### Email Card Fallback
+When scraping is blocked or returns empty data, the agent falls back to the card context parsed directly from the email HTML (title, company, location, pay, rating). This means every site always produces a result even when the job page is behind a login wall.
+
+### AI Field Normalization
+Raw scraped titles are often noisy: `"Urgently hiringSenior AI Engineer (AI)Rivington PartnersMandaluyong City..."`. An LLM normalization step strips prefixes, suffixes, location fragments, and company name from the title to produce clean `normalized_role` and `normalized_pay` fields used in the sheet and notification email.
+
+### Resume Fit Assessment
+Compares each job description against your resume. The LLM returns structured JSON with:
+- `rating` — STRONG / MODERATE / WEAK
+- `match_rows` — 5–8 key JD requirements, each with your matching resume experience and a MATCH / PARTIAL / GAP verdict
+- `summary` — one sentence overall recommendation
+
+### Comparison Table Email
+For STRONG matches, sends an HTML email with a color-coded comparison table:
+
+| JD Requirement | My Resume | Fit |
+|----------------|-----------|-----|
+| LLM experience | Built RAG pipelines with LangGraph | ✓ |
+| Python 5yr+ | 4 years Python, ML projects | ~ |
+| AWS required | No AWS experience | ✗ |
+
+Green = MATCH, orange = PARTIAL, red = GAP.
+
+### Google Sheets Logging
+Automatically creates and manages a `Job Hunting` spreadsheet with 3 tabs:
+- **Jobs** — one row per assessed job with normalized role, company, pay, fit rating, match breakdown, URL
+- **Emails Seen** — audit log of every processed email (deduplication key)
+- **Resume Versions** — tracks resume PDF changes in GDrive with LLM-generated summaries
+
+### Event-Driven Architecture
+Gmail Watch API publishes inbox events to a Cloud Pub/Sub topic in real time. A Cloud Run Function receives the Pub/Sub push, fetches the email, and posts it to the Cloud Run agent. No polling, no cron delays — jobs are processed within seconds of the email arriving.
 
 ---
 
@@ -58,42 +112,35 @@ Each step is a LangGraph node sharing a single typed state object. Scraper nodes
 | Layer | Tool |
 |-------|------|
 | Orchestration | [LangGraph](https://github.com/langchain-ai/langgraph) `StateGraph` with `Send()` fan-out |
-| LLM | [minimax-m2.7](https://ollama.com) via Ollama Cloud API |
-| LangChain binding | `langchain-ollama` (`ChatOllama`) |
-| Browser automation | [Playwright](https://playwright.dev) + [playwright-stealth](https://github.com/AtuboDad/playwright_stealth) (headless Chromium) |
-| Email (read/send) | Gmail API (`google-api-python-client`) |
-| Storage | Google Drive + Sheets API (`google-api-python-client`) |
+| LLM | `minimax-m2.7` via [Ollama Cloud API](https://ollama.com) |
+| Browser automation | [Playwright](https://playwright.dev) + [playwright-stealth](https://github.com/AtuboDad/playwright_stealth) |
+| Email + Drive | Gmail API + Google Drive API + Sheets API (`google-api-python-client`) |
 | HTML parsing | BeautifulSoup4 |
-| PDF extraction | pypdf2 |
-| Scheduling | GitHub Actions cron |
-| Runtime secrets | GitHub Actions Secrets (base64-encoded credential files) |
-
-### LLM
-
-**Model:** `minimax-m2.7` served via [Ollama Cloud](https://ollama.com)
-
-Used for:
-- Classifying whether an email is an AI/ML job alert
-- Confirming whether a scraped job is AI/ML related
-- Assessing resume fit (WEAK / MODERATE / STRONG)
-- Summarising job descriptions
-- Summarising resume versions
+| Agent server | FastAPI + Uvicorn |
+| Deployment | Google Cloud Run (Docker) + Cloud Run Functions |
+| Push notifications | Gmail Watch API → Cloud Pub/Sub |
+| Watch renewal | Cloud Scheduler (daily, midnight PHT) |
+| CI/CD | GitHub Actions (push to `main` → build + deploy) |
+| Secrets | Google Secret Manager |
 
 ---
 
 ## Setup Guide
 
-### Prerequisites
+### What You Need Before Starting
 
-- Python 3.11+
-- A [Google Cloud Console](https://console.cloud.google.com) account
-- An [Ollama Cloud](https://ollama.com) account (free tier works)
-- A Gmail account where you receive job alerts
-- Your resume PDF uploaded to Google Drive in a folder called `Job Hunting`
+- A **Gmail account** where you receive job alert emails from LinkedIn, Jobstreet, Glassdoor, and Indeed
+- A **Google Cloud account** (the same Gmail account works — free tier is sufficient)
+- An **Ollama Cloud account** at [ollama.com](https://ollama.com) (free tier works)
+- Your **resume PDF** ready to upload to Google Drive
+- **Python 3.11+** and **Git** installed locally
+- **gcloud CLI** installed ([install guide](https://cloud.google.com/sdk/docs/install))
 
 ---
 
-### Step 1 — Clone and install
+### Part 1 — Local Setup
+
+#### Step 1 — Clone and install
 
 ```bash
 git clone https://github.com/lemonjerome/job-hunting-agent.git
@@ -104,164 +151,184 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
----
+#### Step 2 — Create your Google Cloud project
 
-### Step 2 — Create Google OAuth credentials
+1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+2. Click the project dropdown at the top → **New Project**
+3. Name it `job-hunting-agent` → **Create**
+4. Wait ~30 seconds, then select the new project from the dropdown
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com) → create a new project (e.g. `job-hunting-agent`)
-2. Enable these APIs:
-   - **Gmail API**
-   - **Google Drive API**
-   - **Google Sheets API**
-3. Go to **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID**
+#### Step 3 — Enable APIs
+
+In your new project, go to **APIs & Services → Enable APIs and Services** and enable each of these (search by name, click, then click **Enable**):
+
+- Gmail API
+- Google Drive API
+- Google Sheets API
+
+#### Step 4 — Create OAuth credentials
+
+1. Go to **APIs & Services → Credentials**
+2. Click **+ Create Credentials → OAuth client ID**
+3. If prompted to configure the consent screen:
+   - Click **Configure Consent Screen** → choose **External** → **Create**
+   - Fill in App name (e.g. `Job Hunting Agent`), your email for support and developer contact → **Save and Continue** → **Save and Continue** → **Save and Continue** → **Back to Dashboard**
+4. Back on Credentials, click **+ Create Credentials → OAuth client ID** again
    - Application type: **Desktop app**
-   - Download the JSON file — it will be named something like `client_secret_272268...apps.json`
-4. Rename it to match the pattern in `.env` or note the exact filename
+   - Name: `Job Hunting Agent`
+   - Click **Create**
+5. Click **Download JSON** — save the file inside your project folder (the filename will look like `client_secret_272268....json`)
+6. Add yourself as a test user: go to **OAuth consent screen → Test users → + Add users** → add your Gmail address
 
----
+#### Step 5 — Configure your environment
 
-### Step 3 — Configure environment
-
-Copy `.env.example` to `.env` and fill in your values:
+Create a `.env` file in the project root:
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # if .env.example exists, else create manually
 ```
+
+Edit `.env` with these values:
 
 ```env
 OLLAMA_BASE_URL=https://ollama.com
-OLLAMA_API_KEY=your-key-from-ollama.com
+OLLAMA_API_KEY=your-key-here
 OLLAMA_MODEL=minimax-m2.7
 
-GMAIL_CREDENTIALS=client_secret_YOUR_FILE.json
-GDRIVE_CREDENTIALS=client_secret_YOUR_FILE.json
+GMAIL_CREDENTIALS=client_secret_YOUR_EXACT_FILENAME.json
+GDRIVE_CREDENTIALS=client_secret_YOUR_EXACT_FILENAME.json
 
-SELF_EMAIL=you@gmail.com
+SELF_EMAIL=youremail@gmail.com
+RESUME_FILENAME=Your_Resume_Filename.pdf
 ```
 
-Your Ollama API key is in your [Ollama account settings](https://ollama.com).
+Your Ollama API key: log in at [ollama.com](https://ollama.com) → click your profile → **API Keys** → copy the key.
 
----
-
-### Step 4 — Authenticate with Google (first run only)
-
-Run this once to generate the OAuth token files. A browser window will open asking you to log in and grant permissions.
+#### Step 6 — Authenticate with Google (browser pop-up, one time only)
 
 ```bash
-# Authenticate Gmail (generates .gmail_token.json)
-python -c "
-from tools.gmail_tools import _get_gmail_service
-_get_gmail_service()
-print('Gmail auth OK')
-"
+# Generates .gmail_token.json — a browser window will open, log in and click Allow
+python -c "from tools.gmail_tools import _get_gmail_service; _get_gmail_service(); print('Gmail OK')"
 
-# Authenticate Google Drive/Sheets (generates .gdrive_token.json)
-python -c "
-from tools.sheets_tools import _get_sheets_service
-_get_sheets_service()
-print('Drive auth OK')
-"
+# Generates .gdrive_token.json — same browser flow
+python -c "from tools.sheets_tools import _get_credentials; _get_credentials(); print('Drive OK')"
 ```
 
-After running both, you'll have `.gmail_token.json` and `.gdrive_token.json` in your project root. These are gitignored — never commit them.
+Both token files are gitignored. Never commit them.
 
----
+#### Step 7 — Upload your resume to Google Drive
 
-### Step 5 — Upload your resume
+1. Go to [drive.google.com](https://drive.google.com)
+2. Create a folder called exactly **`Job Hunting`** (case sensitive)
+3. Upload your resume PDF into that folder
+4. Make sure `RESUME_FILENAME` in `.env` exactly matches the PDF filename
 
-Upload your resume PDF to Google Drive in a folder called **`Job Hunting`**. The filename can be anything — you'll set it as an env var.
-
-Set `RESUME_FILENAME` in your `.env` to match the exact filename (case-sensitive):
-
-```env
-RESUME_FILENAME=Your_Name_Resume.pdf
-```
-
-Version tracking is automatic — every time the agent runs, it checks whether the GDrive PDF has been modified since the last logged version and logs a new entry if so. No manual script needed.
-
----
-
-### Step 6 — Test locally
+#### Step 8 — Test locally
 
 ```bash
 python main.py
 ```
 
-Expected output on a run with no new job emails:
-
+Expected output when no new emails:
 ```
 [email_screener] No new job alert emails found.
-Run complete.
-  Assessed jobs : 0
-  New in sheet  : 0
+Run complete. Assessed jobs: 0 | New in sheet: 0
 ```
 
-On a run with matching emails:
-
-```
-[email_screener] glassdoor | YES | 3 URL(s) | 'New AI jobs matching your search'
-[email_screener] jobstreet | YES | 2 URL(s) | 'New jobs for you'
-[job_screener] STRONG   | 'ML Engineer' @ TechCorp [scraped]
-...
+To test a specific site's email parsing without writing to the sheet:
+```bash
+python scripts/test_site.py --site linkedin --skip-scrape
+python scripts/test_site.py --site all --max-urls 2
 ```
 
-You can also run a quick LLM connectivity check without triggering the full graph:
+---
+
+### Part 2 — Google Cloud Deployment
+
+#### Step 9 — Install and authenticate gcloud
 
 ```bash
-python main.py --smoke-test
+# Install: https://cloud.google.com/sdk/docs/install
+gcloud auth login                    # log in with your Gmail account
+gcloud auth application-default login  # sets ADC credentials for Python libraries
+gcloud config set project YOUR_PROJECT_ID
 ```
 
----
+To find your project ID: [console.cloud.google.com](https://console.cloud.google.com) → project dropdown → your project → the ID is shown below the name.
 
-### Step 7 — Set GitHub Secrets
-
-Before pushing, add these 6 secrets to your GitHub repo under **Settings → Secrets and variables → Actions**:
-
-| Secret name | How to get the value |
-|-------------|----------------------|
-| `GMAIL_CREDENTIALS_JSON` | `base64 -i client_secret_*.json \| tr -d '\n'` |
-| `GDRIVE_TOKEN_JSON` | `base64 -i .gdrive_token.json \| tr -d '\n'` |
-| `GMAIL_TOKEN_JSON` | `base64 -i .gmail_token.json \| tr -d '\n'` |
-| `OLLAMA_BASE_URL` | `https://ollama.com` |
-| `OLLAMA_API_KEY` | your Ollama Cloud API key |
-| `SELF_EMAIL` | your Gmail address |
-| `RESUME_FILENAME` | exact PDF filename in your Drive (e.g. `John_Doe_Resume.pdf`) |
-
-The first three commands run in your terminal from the project root. Copy the full output (including any trailing `=`) into the secret value field.
-
----
-
-### Step 8 — Push to GitHub
+#### Step 10 — Run the GCP setup script
 
 ```bash
-git push -u origin main
+export GCP_PROJECT=your-project-id
+bash scripts/gcloud_setup.sh
 ```
 
----
+This script will:
+- Enable all required GCP APIs (Cloud Run, Cloud Functions, Pub/Sub, Secret Manager, Artifact Registry, Cloud Scheduler)
+- Create an Artifact Registry Docker repository
+- Create the `gmail-job-alerts` Pub/Sub topic and grant Gmail push permissions
+- Create the `job-agent-runner` service account with required IAM roles
+- Prompt you to enter your secrets (Ollama key, email, resume filename)
+- Store your OAuth credential files in Secret Manager
+- Register the Gmail Watch
 
-### Step 9 — Verify GitHub Actions
+#### Step 11 — Create a GitHub Actions service account key
 
-1. Go to your repo on GitHub → **Actions** tab
-2. You should see the **Job Hunting Agent** workflow listed
-3. Trigger a manual test run: click the workflow → **Run workflow** → **Run workflow**
-4. Watch the logs — look for `[email_screener]` output in the `Run Job Hunting Agent` step
+```bash
+gcloud iam service-accounts keys create /tmp/gcp-sa-key.json \
+  --iam-account="job-agent-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com"
 
-The workflow will also run automatically on the cron schedule (6am / 2pm / 10pm PHT).
+# Print the base64 value to copy into GitHub
+cat /tmp/gcp-sa-key.json | base64 | tr -d '\n'
+```
 
----
+#### Step 12 — Add GitHub Secrets
 
-## Google Sheets Structure
+Go to your GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
 
-The script creates and manages a file called `Job Huntings` in your `Job Hunting` Drive folder.
+Add these two secrets:
 
-**Jobs tab** — one row per assessed job:
-`Job Role | Company | Description Summary | Site | URL | Resume Strength | Explanation | Pay | Date Added | Status`
+| Secret name | Value |
+|-------------|-------|
+| `GCP_SA_KEY` | The base64 output from Step 11 |
+| `GCP_PROJECT` | Your GCP project ID (e.g. `job-hunting-agent-491709`) |
 
-**Emails Seen tab** — audit log of every processed email:
-`Gmail Message ID | Site | Sender | Subject | Time Received | Is AI/ML Alert | Jobs Extracted | Summary | Processed At`
+#### Step 13 — Push to trigger deployment
 
-**Resume Versions tab** — tracks resume file changes:
-`Version | Filename | GDrive File ID | File Size | Created At | Modified At | Detected At | Short Summary`
+```bash
+git push origin main
+```
+
+Go to **Actions** tab on GitHub and watch the 4-job pipeline:
+1. **Build & Push** — builds the Docker image and pushes to Artifact Registry (~8 min first time)
+2. **Deploy Cloud Run** — deploys the agent server
+3. **Deploy Cloud Function** — deploys the Gmail trigger and wires the Pub/Sub subscription
+4. **Summary** — prints both service URLs
+
+#### Step 14 — Register Gmail Watch
+
+After the pipeline succeeds, run this locally once:
+
+```bash
+GCP_PROJECT=your-project-id python scripts/setup_gmail_watch.py
+```
+
+This tells Gmail to push inbox notifications to your Pub/Sub topic. The watch expires every 7 days — Cloud Scheduler renews it automatically at midnight PHT.
+
+#### Step 15 — Verify the deployment
+
+```bash
+# Get your Cloud Run URL
+CLOUD_RUN_URL=$(gcloud run services describe job-agent \
+  --region us-central1 --format "value(status.url)")
+
+# Health check
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  "$CLOUD_RUN_URL/health"
+# Expected: {"status":"ok"}
+```
+
+The system is now live. The next job alert email that hits your inbox will automatically trigger the full pipeline.
 
 ---
 
@@ -269,22 +336,20 @@ The script creates and manages a file called `Job Huntings` in your `Job Hunting
 
 This is a public repo. The following files are gitignored and never committed:
 
-- `.env` — API keys and email address
+- `.env` — API keys and personal config
 - `client_secret_*.json` — Google OAuth credentials
 - `.gdrive_token.json` / `.gmail_token.json` — OAuth tokens
-- `resume.md` — local resume copy (resume PDF stays in Google Drive only)
+- `resume.md` — local resume text copy (PDF lives in GDrive only)
+- `PROJECT_SUMMARY.md` — personal technical notes
 
-In GitHub Actions, credentials are written from base64-encoded secrets at runtime and deleted immediately after the run completes.
+Secrets on Cloud Run are loaded from Google Secret Manager at runtime. Nothing sensitive is baked into the Docker image.
 
 ---
 
 ## Adapting for Yourself
 
-To use this for your own job search:
-
-1. Set `RESUME_FILENAME` in `.env` (and as a GitHub Secret) to your PDF filename
-2. Optionally update `EMAIL_SENDERS` in `config.py` if you use different job alert senders
-3. Optionally adjust `EMAIL_LOOKBACK_HOURS` (default: 8h, matches the 3×/day schedule)
-4. Upload your resume PDF to Google Drive in a `Job Hunting` folder
-5. Follow the setup guide above
-
+1. Update `RESUME_FILENAME` in `.env` and in Secret Manager to your PDF filename
+2. Optionally update `EMAIL_SENDERS` in `config.py` for different job alert senders
+3. Optionally adjust `EMAIL_LOOKBACK_HOURS` in `config.py` (default: 8h)
+4. Update the LLM prompts in `agents/email_screener.py` and `agents/job_screener.py` to match your target roles
+5. Upload your resume PDF to GDrive in a folder named `Job Hunting`
