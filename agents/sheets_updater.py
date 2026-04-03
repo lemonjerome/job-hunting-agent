@@ -14,7 +14,7 @@ Output state: new_jobs (only the rows actually added this run)
 from __future__ import annotations
 
 from graph.state import AssessedJob
-from tools.sheets_tools import append_job, get_existing_job_urls
+from tools.sheets_tools import append_job, ensure_jobs_headers, get_existing_job_urls
 
 
 async def sheets_updater_node(state: dict) -> dict:
@@ -31,6 +31,9 @@ async def sheets_updater_node(state: dict) -> dict:
         print("[sheets_updater] No assessed jobs to write.")
         return {"new_jobs": []}
 
+    # Ensure header row is current (adds Location column to existing sheets)
+    ensure_jobs_headers(spreadsheet_id)
+
     # Fresh URL set — re-fetch at write time to catch any concurrent runs
     existing_urls = get_existing_job_urls(spreadsheet_id)
 
@@ -43,14 +46,15 @@ async def sheets_updater_node(state: dict) -> dict:
             continue
 
         append_job(spreadsheet_id, {
-            "title":                job.title,
+            "title":                job.normalized_role or job.title,
             "company":              job.company,
             "description_summary":  job.description_summary,
             "site":                 job.site,
             "url":                  job.url,
             "resume_strength":      job.resume_strength,
             "strength_explanation": job.strength_explanation,
-            "pay":                  job.pay,
+            "pay":                  job.normalized_pay or job.pay,
+            "location":             job.normalized_location or job.location,
             "date_added":           job.date_added,
         })
 

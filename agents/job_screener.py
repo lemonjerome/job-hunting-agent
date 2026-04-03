@@ -189,8 +189,8 @@ async def _is_ai_ml(llm, job: JobData) -> bool:
     return resp.content.strip().upper().startswith("YES")
 
 
-async def _normalize_fields(llm, job: JobData) -> tuple[str, str]:
-    """Returns (normalized_role, normalized_pay) extracted by LLM."""
+async def _normalize_fields(llm, job: JobData) -> tuple[str, str, str]:
+    """Returns (normalized_role, normalized_pay, normalized_location) extracted by LLM."""
     desc_excerpt = job.description[:500] if job.description else ""
     resp = await llm.ainvoke([HumanMessage(content=_NORMALIZE_PROMPT.format(
         raw_title=job.title,
@@ -203,9 +203,9 @@ async def _normalize_fields(llm, job: JobData) -> tuple[str, str]:
         # Strip markdown fences if present
         text = resp.content.strip().strip("```json").strip("```").strip()
         data = json.loads(text)
-        return data.get("role", ""), data.get("pay_range", "")
+        return data.get("role", ""), data.get("pay_range", ""), data.get("location", "")
     except Exception:
-        return "", ""
+        return "", "", ""
 
 
 async def _assess(llm, job: JobData, resume: str) -> tuple[str, str, list[dict]]:
@@ -301,7 +301,7 @@ async def job_screener_node(state: dict) -> dict:
             normalize_task = asyncio.create_task(_normalize_fields(llm, job))
             strength_task  = asyncio.create_task(_assess(llm, job, resume_text))
             summary_task   = asyncio.create_task(_summarise(llm, job))
-            normalized_role, normalized_pay = await normalize_task
+            normalized_role, normalized_pay, normalized_location = await normalize_task
             strength, explanation, match_breakdown = await strength_task
             summary = await summary_task
 
@@ -316,6 +316,7 @@ async def job_screener_node(state: dict) -> dict:
                 scrape_source=job.source,
                 normalized_role=normalized_role,
                 normalized_pay=normalized_pay,
+                normalized_location=normalized_location,
                 is_ai_ml=True,
                 description_summary=summary,
                 resume_strength=strength,

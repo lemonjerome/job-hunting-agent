@@ -43,6 +43,7 @@ class AssessedJob:
     # From job_screener — AI-normalized fields
     normalized_role: str = ""         # clean role name (no location/mode suffixes)
     normalized_pay: str = ""          # pay range extracted/normalized by LLM
+    normalized_location: str = ""     # city/country or Remote/Hybrid extracted by LLM
 
     # From job_screener — assessment
     is_ai_ml: bool = False
@@ -68,6 +69,7 @@ class AssessedJob:
             self.resume_strength,
             self.strength_explanation,
             self.normalized_pay or self.pay,
+            self.normalized_location or self.location,
             self.date_added or datetime.now().strftime("%Y-%m-%d"),
             "Active",
         ]

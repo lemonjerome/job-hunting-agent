@@ -111,7 +111,7 @@ def _build_email(
             <table style="font-size:13px;border-collapse:collapse">
                 <tr>
                     <td style="color:#555;padding:2px 0">📍 Location</td>
-                    <td style="padding:2px 8px">{job.location or '—'}</td>
+                    <td style="padding:2px 8px">{job.normalized_location or job.location or '—'}</td>
                 </tr>
                 {pay_row}
                 <tr>

@@ -49,7 +49,7 @@ SCOPES = [
 
 JOBS_HEADERS = [
     "Job Role", "Company", "Job Description Summary", "Site", "URL",
-    "Resume Strength", "Strength Explanation", "Pay", "Date Added", "Status",
+    "Resume Strength", "Strength Explanation", "Pay", "Location", "Date Added", "Status",
 ]
 
 EMAILS_HEADERS = [
@@ -235,6 +235,21 @@ def _append_row(spreadsheet_id: str, sheet_name: str, row: list[Any]) -> None:
     ).execute()
 
 
+def ensure_jobs_headers(spreadsheet_id: str) -> None:
+    """
+    Write the current JOBS_HEADERS to row 1 of the Jobs tab.
+    Idempotent — safe to call on existing sheets; adds new columns without
+    shifting data (existing rows just have blank cells in new columns).
+    """
+    sheets = _sheets_service()
+    sheets.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"{SHEET_JOBS}!A1",
+        valueInputOption="RAW",
+        body={"values": [JOBS_HEADERS]},
+    ).execute()
+
+
 def append_job(spreadsheet_id: str, job: dict) -> None:
     """Append one row to the Jobs tab."""
     row = [
@@ -246,6 +261,7 @@ def append_job(spreadsheet_id: str, job: dict) -> None:
         job.get("resume_strength", ""),
         job.get("strength_explanation", ""),
         job.get("pay", ""),
+        job.get("location", ""),
         job.get("date_added", datetime.now().strftime("%Y-%m-%d")),
         "Active",
     ]
