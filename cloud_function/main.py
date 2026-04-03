@@ -229,9 +229,19 @@ def handle_gmail_notification(request):
         }
 
         try:
+            # Cloud Run requires a Google-signed identity token for authenticated requests.
+            # Fetch a token from the GCE metadata server targeting the Cloud Run URL as audience.
+            token_resp = requests.get(
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
+                params={"audience": AGENT_URL.rstrip("/")},
+                headers={"Metadata-Flavor": "Google"},
+                timeout=5,
+            )
+            id_token = token_resp.text.strip()
             resp = requests.post(
                 AGENT_URL.rstrip("/") + "/process",
                 json=payload,
+                headers={"Authorization": f"Bearer {id_token}"},
                 timeout=530,  # Cloud Function timeout is 540s — give Cloud Run 530s to respond
             )
             print(
