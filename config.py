@@ -1,6 +1,13 @@
 import os
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
+
+PHT = timezone(timedelta(hours=8))  # Philippine Time (UTC+8)
+
+def now_pht() -> datetime:
+    """Return the current datetime in Philippine Time."""
+    return datetime.now(tz=PHT)
 
 load_dotenv()
 

@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-from datetime import datetime
+from config import now_pht
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage
@@ -279,7 +279,7 @@ async def job_screener_node(state: dict) -> dict:
     llm = get_llm(temperature=0.0)
     resume_text = _load_resume()
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_pht().strftime("%Y-%m-%d")
     assessed: list[AssessedJob] = []
 
     for site, jobs in raw_listings.items():

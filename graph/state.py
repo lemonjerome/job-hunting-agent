@@ -59,7 +59,7 @@ class AssessedJob:
 
     def to_sheet_row(self) -> list[Any]:
         """Return values in Jobs sheet column order."""
-        from datetime import datetime
+        from config import now_pht
         return [
             self.normalized_role or self.title,
             self.company,
@@ -70,7 +70,7 @@ class AssessedJob:
             self.strength_explanation,
             self.normalized_pay or self.pay,
             self.normalized_location or self.location,
-            self.date_added or datetime.now().strftime("%Y-%m-%d"),
+            self.date_added or now_pht().strftime("%Y-%m-%d"),
             "Active",
         ]
 

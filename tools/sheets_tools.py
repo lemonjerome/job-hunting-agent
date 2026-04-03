@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from config import now_pht
 from pathlib import Path
 from typing import Any
 
@@ -262,7 +262,7 @@ def append_job(spreadsheet_id: str, job: dict) -> None:
         job.get("strength_explanation", ""),
         job.get("pay", ""),
         job.get("location", ""),
-        job.get("date_added", datetime.now().strftime("%Y-%m-%d")),
+        job.get("date_added", now_pht().strftime("%Y-%m-%d")),
         "Active",
     ]
     _append_row(spreadsheet_id, SHEET_JOBS, row)
@@ -279,7 +279,7 @@ def append_email_seen(spreadsheet_id: str, record: dict) -> None:
         record.get("is_ai_ml", ""),
         record.get("jobs_extracted", 0),
         record.get("summary", ""),
-        datetime.now().isoformat(),
+        now_pht().isoformat(),
     ]
     _append_row(spreadsheet_id, SHEET_EMAILS, row)
 
@@ -302,7 +302,7 @@ def append_resume_version(spreadsheet_id: str, record: dict) -> None:
         record.get("file_size", ""),
         record.get("created_at", ""),
         record.get("modified_at", ""),
-        record.get("detected_at", datetime.now().isoformat()),
+        record.get("detected_at", now_pht().isoformat()),
         record.get("short_summary", ""),
     ]
     _append_row(spreadsheet_id, SHEET_RESUME, row)

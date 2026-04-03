@@ -268,7 +268,8 @@ def _parse_date(date_str: str) -> str:
     from email.utils import parsedate_to_datetime
     try:
         dt = parsedate_to_datetime(date_str)
-        return dt.astimezone(timezone.utc).isoformat()
+        from config import PHT
+        return dt.astimezone(PHT).isoformat()
     except Exception:
         return date_str
 
