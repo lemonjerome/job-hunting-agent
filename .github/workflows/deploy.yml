@@ -76,11 +76,7 @@ jobs:
             --max-instances 3 \
             --service-account "job-agent-runner@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com" \
             --no-allow-unauthenticated \
-            --set-secrets "\
-              OLLAMA_BASE_URL=OLLAMA_BASE_URL:latest,\
-              OLLAMA_API_KEY=OLLAMA_API_KEY:latest,\
-              SELF_EMAIL=SELF_EMAIL:latest,\
-              RESUME_FILENAME=RESUME_FILENAME:latest" \
+            --set-secrets "OLLAMA_BASE_URL=OLLAMA_BASE_URL:latest,OLLAMA_API_KEY=OLLAMA_API_KEY:latest,SELF_EMAIL=SELF_EMAIL:latest,RESUME_FILENAME=RESUME_FILENAME:latest" \
             --set-env-vars "OLLAMA_MODEL=minimax-m2.7,GCP_PROJECT=${{ secrets.GCP_PROJECT }},GMAIL_TOKEN_SECRET=gmail-oauth-token,GDRIVE_TOKEN_SECRET=gdrive-oauth-token" \
             --quiet
 
@@ -141,10 +137,7 @@ jobs:
             --memory 256Mi \
             --timeout 540s \
             --service-account "job-agent-runner@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com" \
-            --set-env-vars "\
-              AGENT_CLOUD_RUN_URL=${{ steps.cloud-run-url.outputs.url }},\
-              GCP_PROJECT=${{ secrets.GCP_PROJECT }},\
-              GMAIL_TOKEN_SECRET=gmail-oauth-token" \
+            --set-env-vars "AGENT_CLOUD_RUN_URL=${{ steps.cloud-run-url.outputs.url }},GCP_PROJECT=${{ secrets.GCP_PROJECT }},GMAIL_TOKEN_SECRET=gmail-oauth-token" \
             --quiet
 
       - name: Get Cloud Function URL
