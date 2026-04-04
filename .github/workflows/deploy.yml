@@ -137,7 +137,7 @@ jobs:
             --memory 256Mi \
             --timeout 540s \
             --service-account "job-agent-runner@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com" \
-            --set-env-vars "AGENT_CLOUD_RUN_URL=${{ steps.cloud-run-url.outputs.url }},GCP_PROJECT=${{ secrets.GCP_PROJECT }},GMAIL_TOKEN_SECRET=gmail-oauth-token" \
+            --set-env-vars "AGENT_CLOUD_RUN_URL=${{ steps.cloud-run-url.outputs.url }},GCP_PROJECT=${{ secrets.GCP_PROJECT }},GMAIL_TOKEN_SECRET=gmail-oauth-token,HISTORY_ID_SECRET=gmail-history-id" \
             --quiet
 
       - name: Get Cloud Function URL

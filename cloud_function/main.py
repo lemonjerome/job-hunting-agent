@@ -38,6 +38,7 @@ from google.cloud import secretmanager
 AGENT_URL = os.environ.get("AGENT_CLOUD_RUN_URL", "")
 GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
 GMAIL_TOKEN_SECRET = os.environ.get("GMAIL_TOKEN_SECRET", "gmail-oauth-token")
+HISTORY_ID_SECRET = os.environ.get("HISTORY_ID_SECRET", "gmail-history-id")
 
 EMAIL_SENDERS: dict[str, str] = {
     "linkedin":  "jobalerts-noreply@linkedin.com",
@@ -50,10 +51,6 @@ GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
 ]
-
-# Track the last processed historyId to avoid reprocessing
-# (stored in-memory per function instance; Cloud Pub/Sub deduplicates via ack_id)
-_last_history_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +83,35 @@ def _update_secret(token_json: str) -> None:
         )
     except Exception as e:
         print(f"[gmail-trigger] Warning: could not update token secret: {e}")
+
+
+# ---------------------------------------------------------------------------
+# HistoryId persistence (survives cold starts)
+# ---------------------------------------------------------------------------
+
+def _load_history_id() -> str | None:
+    """Read the last processed historyId from Secret Manager."""
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{GCP_PROJECT}/secrets/{HISTORY_ID_SECRET}/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        value = response.payload.data.decode("utf-8").strip()
+        return value or None
+    except Exception as e:
+        print(f"[gmail-trigger] Warning: could not load historyId: {e}")
+        return None
+
+
+def _save_history_id(history_id: str) -> None:
+    """Persist the current historyId to Secret Manager for the next invocation."""
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        parent = f"projects/{GCP_PROJECT}/secrets/{HISTORY_ID_SECRET}"
+        client.add_secret_version(
+            request={"parent": parent, "payload": {"data": history_id.encode()}}
+        )
+    except Exception as e:
+        print(f"[gmail-trigger] Warning: could not save historyId: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +198,6 @@ def handle_gmail_notification(request):
         "subscription": "..."
       }
     """
-    global _last_history_id
-
     # -- Decode Pub/Sub envelope --
     try:
         envelope = request.get_json(silent=True) or {}
@@ -187,9 +211,14 @@ def handle_gmail_notification(request):
     if not history_id:
         return "OK", 200  # Nothing to do
 
-    # Use the previous history_id as the start point for the history diff
-    start_id = _last_history_id or str(int(history_id) - 1)
-    _last_history_id = history_id
+    # Load the last known historyId from Secret Manager (survives cold starts).
+    # Falls back to history_id - 1 only on very first run when no secret exists yet.
+    start_id = _load_history_id() or str(int(history_id) - 1)
+    print(f"[gmail-trigger] Processing historyId={history_id}, start={start_id}")
+
+    # Persist current historyId immediately so the next invocation knows where to resume,
+    # even if this invocation crashes mid-way.
+    _save_history_id(history_id)
 
     if not AGENT_URL:
         print("[gmail-trigger] AGENT_CLOUD_RUN_URL not set — skipping.")
@@ -213,6 +242,7 @@ def handle_gmail_notification(request):
         site = _identify_site(sender)
 
         if not site:
+            print(f"[gmail-trigger] Skipping non-job-alert sender: {sender!r}")
             continue  # Not a job alert sender — ignore
 
         subject = _extract_header(headers, "Subject")
