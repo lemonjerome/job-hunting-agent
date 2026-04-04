@@ -81,8 +81,8 @@ When scraping is blocked or returns empty data, the agent falls back to the card
 
 For LinkedIn, Indeed, and Glassdoor jobs that reach the sheet via email fallback with no description, JobSpy (`python-jobspy`) searches for the job by title to retrieve the full description.
 
-### AI Field Normalization
-Raw scraped titles are often noisy: `"Urgently hiringSenior AI Engineer (AI)Rivington PartnersMandaluyong City..."`. An LLM normalization step strips prefixes, suffixes, location fragments, and company name from the title to produce clean `normalized_role` and `normalized_pay` fields used in the sheet and notification email.
+### LLM Field Normalization (Role, Pay, Location)
+Raw scraped titles are often noisy: `"Urgently hiringSenior AI Engineer (AI)Rivington PartnersMandaluyong City..."`. An LLM normalization step reasons over all raw fields (title, company, location, pay, description excerpt) and produces clean `normalized_role`, `normalized_pay`, and `normalized_location` — no site-specific string parsing. The LLM handles all 4 sites identically regardless of email format changes.
 
 ### Resume Fit Assessment
 Compares each job description against your resume. The LLM returns structured JSON with:
@@ -103,12 +103,16 @@ Green = MATCH, orange = PARTIAL, red = GAP.
 
 ### Google Sheets Logging
 Automatically creates and manages a `Job Hunting` spreadsheet with 3 tabs:
-- **Jobs** — one row per assessed job with normalized role, company, pay, fit rating, match breakdown, URL
+- **Jobs** — one row per assessed job: normalized role, company, location, pay, fit rating, match breakdown, URL. All dates and timestamps are in Philippine Time (PHT, UTC+8).
 - **Emails Seen** — audit log of every processed email (deduplication key)
 - **Resume Versions** — tracks resume PDF changes in GDrive with LLM-generated summaries
 
+The sheet header is updated automatically on every write run — adding new columns (like Location) to existing sheets without shifting existing data.
+
 ### Event-Driven Architecture
 Gmail Watch API publishes inbox events to a Cloud Pub/Sub topic in real time. A Cloud Run Function receives the Pub/Sub push, fetches the email, and posts it to the Cloud Run agent. No polling, no cron delays — jobs are processed within seconds of the email arriving.
+
+The last processed Gmail `historyId` is persisted in Secret Manager after every invocation. This ensures the Cloud Function always knows where to resume — even after a cold start — so no emails are missed when the function scales to zero between job alert batches.
 
 ---
 
